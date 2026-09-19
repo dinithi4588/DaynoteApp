@@ -84,7 +84,7 @@ const UI = (() => {
   // every time the user navigates to a new page.
 
   // Path to the built APK — served from the GitHub Release asset.
-  const APK_URL = 'https://github.com/ModithaAbey/DaynoteApp/releases/download/latest/app-debug.apk';
+  const APK_URL = 'https://github.com/dinithi4588/DaynoteApp/releases/download/latest/app-debug.apk';
 
   // Chrome (and other Chromium browsers) treat this site as an installable
   // PWA on its own — because of manifest.json + a registered service
