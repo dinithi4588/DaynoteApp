@@ -67,6 +67,43 @@ jobs:
       # sizes/densities Android needs.
       - name: Generate native app icon from www/assets/icons/icon.png
         run: npx capacitor-assets generate --android --assetPath www/assets/icons
+      # Builds the launcher icon so it is not cropped. Android draws an app
+      # icon from two layers on a 108dp canvas, and each phone shows only the
+      # middle part (about 2/3) through its own mask (circle, squircle, ...).
+      # The old icon (a maroon square with a thin cream outline) filled that
+      # whole visible area, so the outline was cut off on some phones. Here
+      # the background is a plain cream layer and the foreground is the
+      # maroon "D" square (icon-foreground.png at the repo root, 1024x1024,
+      # transparent, artwork kept well inside the safe area), so the mask can
+      # only trim plain cream and the outline always shows in full. This
+      # overwrites the adaptive-icon files made by the generator above.
+      - name: Build adaptive launcher icon (outline stays inside the safe area)
+        run: |
+          node <<'EOF'
+          const sharp = require('sharp');
+          const fs = require('fs');
+          const res = 'android/app/src/main/res';
+          const sizes = { mdpi: 108, hdpi: 162, xhdpi: 216, xxhdpi: 324, xxxhdpi: 432 };
+          (async () => {
+            for (const [density, px] of Object.entries(sizes)) {
+              const dir = res + '/mipmap-' + density;
+              fs.mkdirSync(dir, { recursive: true });
+              await sharp('icon-foreground.png').resize(px, px).png().toFile(dir + '/ic_launcher_foreground.png');
+            }
+            const adaptive = '<?xml version="1.0" encoding="utf-8"?>\n' +
+              '<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n' +
+              '    <background android:drawable="@color/ic_launcher_background"/>\n' +
+              '    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>\n' +
+              '</adaptive-icon>\n';
+            fs.mkdirSync(res + '/mipmap-anydpi-v26', { recursive: true });
+            fs.writeFileSync(res + '/mipmap-anydpi-v26/ic_launcher.xml', adaptive);
+            fs.writeFileSync(res + '/mipmap-anydpi-v26/ic_launcher_round.xml', adaptive);
+            fs.mkdirSync(res + '/values', { recursive: true });
+            fs.writeFileSync(res + '/values/ic_launcher_background.xml',
+              '<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <color name="ic_launcher_background">#E4D6CC</color>\n</resources>\n');
+            console.log('adaptive launcher icon written');
+          })();
+          EOF
       # Uses a fixed debug keystore (committed at repo root as
       # daynote-debug.keystore) instead of the default one Gradle would
       # otherwise auto-generate fresh on every run. Without this, the
