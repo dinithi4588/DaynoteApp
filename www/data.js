@@ -263,6 +263,10 @@ const DB = (() => {
     isOnboarded() { return !!kvGet('onboarded', false); },
     completeOnboarding({ name, email }) {
       kvSet('onboarded', true);
+      // Signing back in with an email that's already on this device reuses
+      // that saved account instead of adding a duplicate to the list.
+      const existing = email ? kvGet('accounts', []).find((a) => (a.email || '').toLowerCase() === email.trim().toLowerCase()) : null;
+      if (existing) return this.switchAccount(existing.id);
       return this.addAccount({ name, email });
     },
     listAccounts() { return kvGet('accounts', []); },
@@ -294,9 +298,22 @@ const DB = (() => {
       }
     },
 
-    signOut() {
-      if (typeof firebase !== 'undefined' && firebase.auth) firebase.auth().signOut().catch(() => {});
+    // Signs out for real: ends the Firebase session (and, in the Android
+    // app, the native Google session, so Google's account chooser shows
+    // again next time), locks the app, and clears the "onboarded" flag so
+    // the next page load shows the sign-in screen. The person's calendar,
+    // tasks, finance and journal data are NOT deleted -- they stay on this
+    // device (Delete account is the action that wipes them).
+    async signOut() {
+      if (typeof firebase !== 'undefined' && firebase.auth) {
+        try { await firebase.auth().signOut(); } catch (e) { /* already signed out */ }
+      }
+      const nativeAuth = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.FirebaseAuthentication;
+      if (nativeAuth && nativeAuth.signOut) {
+        try { await nativeAuth.signOut(); } catch (e) { /* not signed in natively */ }
+      }
       sessionStorage.removeItem('daynote.unlocked');
+      kvSet('onboarded', false);
       return true;
     },
     async deleteAccount() {
