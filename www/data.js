@@ -271,6 +271,43 @@ const DB = (() => {
     }).catch(() => null);
   }
 
+  // ---------------- Backup validation ----------------
+  // A parsed JSON file must really look like a DayNote backup before
+  // anything on the device is cleared or overwritten. Returns
+  // { shape: 'current' | 'old', counts: { items, journal, finance } }, or
+  // throws a readable Error for anything that isn't a DayNote backup.
+  const BACKUP_STORES = ['events', 'tasks', 'transactions', 'notes', 'financeTxns'];
+  const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+  function analyzeBackup(payload) {
+    const notABackup = () => new Error('That file doesn\u2019t look like a DayNote backup.');
+    if (!isPlainObject(payload) || !isPlainObject(payload.data)) throw notABackup();
+    const d = payload.data;
+    const len = (v) => (Array.isArray(v) ? v.length : 0);
+    if (BACKUP_STORES.some((s) => Array.isArray(d[s])) || isPlainObject(d.kv)) {
+      return {
+        shape: 'current',
+        counts: {
+          items: len(d.events) + len(d.tasks),
+          journal: len(d.notes),
+          finance: len(d.financeTxns) + len(d.transactions),
+        },
+      };
+    }
+    if (Object.values(OLD_KEYS).some((k) => k in d)) {
+      // Old localStorage-era backup: a flat map of "daynote.xxx" -> JSON string.
+      const arr = (k) => { try { return len(JSON.parse(d[k])); } catch (e) { return 0; } };
+      return {
+        shape: 'old',
+        counts: {
+          items: arr(OLD_KEYS.events) + arr(OLD_KEYS.tasks),
+          journal: arr(OLD_KEYS.notes),
+          finance: arr(OLD_KEYS.financeTxns) + arr(OLD_KEYS.transactions),
+        },
+      };
+    }
+    throw notABackup();
+  }
+
   return {
     ready, // await this before the first read, e.g. `await DB.ready` in each page's bootstrap script
 
@@ -455,25 +492,45 @@ const DB = (() => {
         },
       };
     },
+    // One-line summary of what a backup file contains, for the "Import this
+    // backup?" box. Throws the same readable error as importAll for files
+    // that aren't DayNote backups.
+    describeBackup(payload) {
+      const { counts } = analyzeBackup(payload);
+      const parts = [];
+      if (counts.items) parts.push(`${counts.items} calendar/task item${counts.items === 1 ? '' : 's'}`);
+      if (counts.journal) parts.push(`${counts.journal} journal page${counts.journal === 1 ? '' : 's'}`);
+      if (counts.finance) parts.push(`${counts.finance} finance entr${counts.finance === 1 ? 'y' : 'ies'}`);
+      const what = parts.length ? parts.join(', ') : 'no calendar, journal or finance entries';
+      const when = payload.exportedAt && !isNaN(Date.parse(payload.exportedAt))
+        ? ` from ${new Date(payload.exportedAt).toLocaleDateString()}` : '';
+      return `a backup${when} with ${what}`;
+    },
     async importAll(payload) {
-      if (!payload || typeof payload !== 'object' || !payload.data || typeof payload.data !== 'object') {
-        throw new Error('That file doesn\u2019t look like a DayNote backup.');
-      }
+      // Validate FIRST: nothing on the device is cleared or overwritten
+      // unless this passes (it throws for anything that isn't a backup).
+      const { shape } = analyzeBackup(payload);
       const d = payload.data;
-      const isOldFlatShape = !('kv' in d) && !Array.isArray(d.events);
+      const writes = [];        // every write, so we can wait for all of them
+      const expected = {};      // store -> how many records should end up saved
 
-      if (isOldFlatShape) {
+      // Replaces one store with the backup's records. Stores the backup
+      // doesn't contain are left exactly as they are.
+      const restoreStore = async (storeName, records) => {
+        await collection(storeName).clear();
+        const valid = records.filter((r) => r && r.id);
+        valid.forEach((r) => writes.push(idbPut(storeName, r)));
+        expected[storeName] = new Set(valid.map((r) => r.id)).size;
+      };
+
+      if (shape === 'old') {
         // Old backup: flat map of localStorage-style keys to JSON strings.
         const get = (k) => { try { return JSON.parse(d[k]); } catch (e) { return null; } };
-        const putAllIfArray = (storeName, raw) => {
-          if (Array.isArray(raw)) raw.forEach((r) => { if (r && r.id) idbPut(storeName, r); });
-        };
-        await collection('events').clear(); putAllIfArray('events', get(OLD_KEYS.events));
-        await collection('tasks').clear(); putAllIfArray('tasks', get(OLD_KEYS.tasks));
-        await collection('transactions').clear(); putAllIfArray('transactions', get(OLD_KEYS.transactions));
-        await collection('notes').clear(); putAllIfArray('notes', get(OLD_KEYS.notes));
-        await collection('financeTxns').clear(); putAllIfArray('financeTxns', get(OLD_KEYS.financeTxns));
-        const putKV = (id, value) => { if (value !== null && value !== undefined) idbPut('kv', { id, value }); };
+        for (const s of BACKUP_STORES) {
+          const key = OLD_KEYS[s];
+          if (key in d && Array.isArray(get(key))) await restoreStore(s, get(key));
+        }
+        const putKV = (id, value) => { if (value !== null && value !== undefined) writes.push(idbPut('kv', { id, value })); };
         putKV('theme', get(OLD_KEYS.theme));
         putKV('profile', get(OLD_KEYS.profile));
         if (d[OLD_KEYS.lockPin]) putKV('lockPin', d[OLD_KEYS.lockPin]);
@@ -484,16 +541,26 @@ const DB = (() => {
         putKV('financeBudgetHistory', get(OLD_KEYS.financeBudgetHistory));
       } else {
         // Current shape: { events:[], tasks:[], transactions:[], notes:[], financeTxns:[], kv:{} }
-        for (const s of ['events', 'tasks', 'transactions', 'notes', 'financeTxns']) {
-          await collection(s).clear();
-          if (Array.isArray(d[s])) d[s].forEach((r) => { if (r && r.id) idbPut(s, r); });
+        for (const s of BACKUP_STORES) {
+          if (Array.isArray(d[s])) await restoreStore(s, d[s]);
         }
-        await idbClear('kv');
-        if (d.kv && typeof d.kv === 'object') {
-          Object.entries(d.kv).forEach(([id, value]) => idbPut('kv', { id, value }));
+        // Saved settings (theme, profile, PIN, sign-in state...) are only
+        // replaced when the backup actually carries them.
+        if (isPlainObject(d.kv)) {
+          await idbClear('kv');
+          Object.entries(d.kv).forEach(([id, value]) => writes.push(idbPut('kv', { id, value })));
         }
       }
+
+      await Promise.all(writes);
       await loadCacheFromIDB();
+
+      // Confirm the data really landed (idbPut only logs its own failures).
+      for (const [storeName, count] of Object.entries(expected)) {
+        if (cache[storeName].length !== count) {
+          throw new Error('Some of the backup couldn\u2019t be saved on this device. Free up some storage and try again.');
+        }
+      }
       return true;
     },
 
