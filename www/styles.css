@@ -32,10 +32,10 @@
   --ink: #2E1918; --ink-soft: #6E4B48; --ink-faint: #A67D79;
   --rule: #E3C6C2; --rule-strong: #CBA29C;
   --calendar: #7A2E2E; --calendar-soft: #F0D6D3;
-  --tasks: #4A6B4C; --tasks-soft: #DCE7DC;
-  --finance: #6B3B4A; --finance-soft: #E9DBDF;
-  --notes: #45566B; --notes-soft: #DBE1E7;
-  --danger: #9C2E28; --danger-soft: #F2D6D2;
+  --tasks: #7A2E2E; --tasks-soft: #F0D6D3;
+  --finance: #7A2E2E; --finance-soft: #F0D6D3;
+  --notes: #7A2E2E; --notes-soft: #F0D6D3;
+  --danger: #7A2E2E; --danger-soft: #F0D6D3;
   --pick: #B8860B; --pick-ring: rgba(184,134,11,.35);
 }
 [data-theme="coffee"] {
@@ -43,10 +43,10 @@
   --ink: #2C1D12; --ink-soft: #6B4E39; --ink-faint: #A3826A;
   --rule: #D8C1A3; --rule-strong: #BFA07A;
   --calendar: #5C3A22; --calendar-soft: #E8D4BC;
-  --tasks: #52603A; --tasks-soft: #DEE2D0;
-  --finance: #6B4234; --finance-soft: #E8D8CF;
-  --notes: #3F5044; --notes-soft: #D9E0DA;
-  --danger: #8A3B24; --danger-soft: #EAD5C7;
+  --tasks: #5C3A22; --tasks-soft: #E8D4BC;
+  --finance: #5C3A22; --finance-soft: #E8D4BC;
+  --notes: #5C3A22; --notes-soft: #E8D4BC;
+  --danger: #5C3A22; --danger-soft: #E8D4BC;
   --pick: #C1272D; --pick-ring: rgba(193,39,45,.35);
 }
 [data-theme="sage"] {
@@ -54,10 +54,10 @@
   --ink: #2A2E27; --ink-soft: #656C5D; --ink-faint: #9DA391;
   --rule: #D8DCC9; --rule-strong: #C1C7AC;
   --calendar: #7C7248; --calendar-soft: #E9E3C6;
-  --tasks: #3E6249; --tasks-soft: #D9E5DC;
-  --finance: #5C5468; --finance-soft: #E1DDE7;
-  --notes: #3D5C64; --notes-soft: #D8E2E3;
-  --danger: #8D4433; --danger-soft: #EADAD1;
+  --tasks: #7C7248; --tasks-soft: #E9E3C6;
+  --finance: #7C7248; --finance-soft: #E9E3C6;
+  --notes: #7C7248; --notes-soft: #E9E3C6;
+  --danger: #7C7248; --danger-soft: #E9E3C6;
   --pick: #B7791F; --pick-ring: rgba(183,121,31,.35);
 }
 
