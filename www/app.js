@@ -384,16 +384,104 @@ const UI = (() => {
       showConfirm({
         title: 'Delete your account?', body: 'This removes all local DayNote data on this device \u2014 calendar, tasks, finance, journal, everything. This can\u2019t be undone.',
         confirmLabel: 'Delete everything', danger: true,
-        onConfirm: () => {
-          DB.deleteAccount();
-          showToast('Account deleted', 'All local data was cleared.');
-          setTimeout(() => location.reload(), 500);
-        },
+        onConfirm: () => runAccountDeletion(),
       });
     };
     injectAccountsMenu();
     injectDataAndLockMenu();
     document.addEventListener('click', closeAllPopovers);
+  }
+
+  // ---------------- Account deletion ----------------
+  // Waits for the REAL result. It used to fire DB.deleteAccount() without
+  // waiting, show "Account deleted" straight away and reload after 500ms --
+  // which could cut the Firebase request off mid-flight and hid every
+  // failure. Now the success message only appears once the account is
+  // really gone, and if Firebase wants a fresh sign-in first (the usual
+  // reason it refuses) the person is asked to confirm instead.
+  let deletingAccount = false;
+  async function runAccountDeletion(opts) {
+    if (deletingAccount) return;
+    deletingAccount = true;
+    showToast('Deleting account\u2026', 'Please keep the app open.');
+    let result;
+    try { result = await DB.deleteAccount(opts); }
+    catch (e) { result = { ok: false, error: (e && e.message) || 'Something went wrong.' }; }
+    deletingAccount = false;
+
+    if (result && result.ok) {
+      closeModal('#deleteauth-modal-scrim');
+      showToast('Account deleted', 'Your account and all data on this device were removed.');
+      setTimeout(() => location.reload(), 900);
+      return;
+    }
+    if (result && result.needsReauth) { showDeleteReauthModal(result); return; }
+    const msg = (result && result.error) || 'Please try again.';
+    const errEl = $('#deleteauth-error');
+    if (errEl && $('#deleteauth-modal-scrim')?.classList.contains('open')) { errEl.textContent = msg; errEl.style.display = 'block'; return; }
+    showToast('Account NOT deleted', msg);
+  }
+
+  function buildDeleteReauthModalOnce() {
+    if ($('#deleteauth-modal-scrim')) return;
+    const scrim = document.createElement('div');
+    scrim.className = 'modal-scrim';
+    scrim.id = 'deleteauth-modal-scrim';
+    scrim.innerHTML = `
+      <div class="modal" id="deleteauth-modal">
+        <div class="modal-head">
+          <h2 class="font-display">Confirm it\u2019s you</h2>
+          <button class="icon-btn" id="deleteauth-close" aria-label="Close">&#10005;</button>
+        </div>
+        <p style="color:var(--ink-soft);font-size:.85rem;line-height:1.5;margin:0 0 16px;">
+          To permanently delete <b id="deleteauth-email"></b>, sign in once more. This can\u2019t be undone.
+        </p>
+        <div id="deleteauth-google-wrap">
+          <button type="button" class="btn" id="deleteauth-google-btn" style="width:100%;background:#fff;color:#1f1f1f;border:1px solid #dadce0;margin-bottom:14px;">Continue with Google</button>
+          <div class="onboard-divider" id="deleteauth-divider"><span>or</span></div>
+        </div>
+        <form id="deleteauth-form">
+          <div class="field" id="deleteauth-password-field"><label for="deleteauth-password">Password</label><input type="password" id="deleteauth-password" autocomplete="current-password" /></div>
+          <div class="applock-error" id="deleteauth-error" style="display:none;"></div>
+          <div class="btn-row">
+            <button type="button" class="btn ghost" id="deleteauth-cancel">Cancel</button>
+            <button type="submit" class="btn danger" id="deleteauth-submit">Delete account</button>
+          </div>
+        </form>
+      </div>`;
+    document.body.appendChild(scrim);
+    $('#deleteauth-close').onclick = () => closeModal('#deleteauth-modal-scrim');
+    $('#deleteauth-cancel').onclick = () => closeModal('#deleteauth-modal-scrim');
+    $('#deleteauth-form').onsubmit = (e) => {
+      e.preventDefault();
+      const pw = $('#deleteauth-password').value;
+      if (!pw) { const el = $('#deleteauth-error'); el.textContent = 'Enter your password.'; el.style.display = 'block'; return; }
+      $('#deleteauth-error').style.display = 'none';
+      runAccountDeletion({ password: pw });
+    };
+    $('#deleteauth-google-btn').onclick = async () => {
+      $('#deleteauth-error').style.display = 'none';
+      try {
+        const user = await googleSignIn('reauth');
+        if (user) await runAccountDeletion({ freshUser: user });
+      } catch (err) {
+        const el = $('#deleteauth-error'); el.textContent = (err && err.message) || 'Google sign-in failed.'; el.style.display = 'block';
+      }
+    };
+  }
+  function showDeleteReauthModal(info) {
+    buildDeleteReauthModalOnce();
+    const providers = (info && info.providers) || [];
+    const known = providers.length > 0;
+    $('#deleteauth-email').textContent = (info && info.email) || 'your account';
+    $('#deleteauth-google-wrap').style.display = (!known || providers.includes('google.com')) ? '' : 'none';
+    $('#deleteauth-divider').style.display = (!known || (providers.includes('google.com') && providers.includes('password'))) ? '' : 'none';
+    $('#deleteauth-password-field').style.display = (!known || providers.includes('password')) ? '' : 'none';
+    $('#deleteauth-submit').style.display = (!known || providers.includes('password')) ? '' : 'none';
+    $('#deleteauth-password').value = '';
+    $('#deleteauth-error').style.display = 'none';
+    openModal('#deleteauth-modal-scrim');
+    setTimeout(() => $('#deleteauth-password')?.focus(), 50);
   }
 
   // ---------------- Generic confirm modal ----------------
@@ -540,7 +628,7 @@ const UI = (() => {
 
     $('#addaccount-google-btn').onclick = async () => {
       try {
-        const user = await googleSignIn();
+        const user = await googleSignIn(mode);
         if (user) finishWithFirebaseUser(user);
       } catch (e) {
         showError(e.message || 'Google sign-in failed.');
@@ -559,7 +647,7 @@ const UI = (() => {
           : await firebase.auth().createUserWithEmailAndPassword(email, password);
         finishWithFirebaseUser(cred.user);
       } catch (e) {
-        showError(e.message || 'Sign-in failed.');
+        showError(friendlyAuthMessage(e, mode));
       }
     };
 
@@ -751,8 +839,62 @@ const UI = (() => {
   // data lives on-device either way; signing in only personalizes the
   // profile shown around the app (name/photo) and identifies the person
   // for any future cross-device sync.
+  // Turns Firebase's raw error codes into something a person can act on.
+  // Most important case: after an account has been deleted, signing in with
+  // its email fails -- the message says so and points at "Create one", so a
+  // deleted account can only come back by making a brand-new account.
+  function friendlyAuthMessage(e, mode) {
+    const code = (e && e.code) || '';
+    if (['auth/user-not-found', 'auth/invalid-credential', 'auth/invalid-login-credentials'].includes(code)) {
+      return mode === 'signup'
+        ? 'Could not create the account. Please try again.'
+        : 'No account found for this email, or the password is wrong. If you deleted your account, tap \u201CCreate one\u201D below to make a new account.';
+    }
+    if (code === 'auth/wrong-password') return 'Incorrect password.';
+    if (code === 'auth/email-already-in-use') return 'An account with this email already exists. Tap \u201CAlready have an account? Sign in\u201D below.';
+    if (code === 'auth/weak-password') return 'Password must be at least 6 characters.';
+    if (code === 'auth/invalid-email') return 'That email address doesn\u2019t look right.';
+    if (code === 'auth/user-disabled') return 'This account has been disabled.';
+    if (code === 'auth/too-many-requests') return 'Too many attempts. Wait a few minutes and try again.';
+    if (code === 'auth/network-request-failed') return 'No internet connection. Please try again.';
+    return (e && e.message) || 'Sign-in failed.';
+  }
+
+  // If the account was deleted (e.g. from another device), this device can
+  // still be holding an old saved sign-in and would keep letting the person
+  // in. Ask Firebase whether the user still exists; if not, sign out so the
+  // sign-in screen appears and a new account has to be created. Offline /
+  // network errors are ignored -- never lock anyone out just for being offline.
+  async function verifyAccountStillExists() {
+    if (typeof firebase === 'undefined' || !firebase.auth) return;
+    try {
+      const auth = firebase.auth();
+      const user = auth.currentUser || await new Promise((resolve) => {
+        let unsub = null, done = false;
+        const finish = (u) => { if (done) return; done = true; clearTimeout(t); if (unsub) unsub(); resolve(u); };
+        const t = setTimeout(() => finish(null), 4000);
+        unsub = auth.onAuthStateChanged(finish, () => finish(null));
+        if (done && unsub) unsub();
+      });
+      if (!user) return;
+      await user.reload();
+    } catch (e) {
+      const code = (e && e.code) || '';
+      if (['auth/user-not-found', 'auth/user-token-expired', 'auth/user-disabled', 'auth/invalid-user-token'].includes(code)) {
+        try { await DB.signOut(); } catch (err) { /* ignore */ }
+        showToast('Account no longer exists', 'Please sign in or create a new account.');
+        setTimeout(() => location.reload(), 900);
+      }
+    }
+  }
+
   function guardOnboarding(onDone) {
-    if (DB.isOnboarded()) { onDone(); return; }
+    if (DB.isOnboarded()) { onDone(); verifyAccountStillExists(); return; }
+    // First finish off any half-done "no account found" attempt from last time.
+    cleanupPendingDiscard().then(() => showSignInFlow(onDone), () => showSignInFlow(onDone));
+  }
+
+  function showSignInFlow(onDone) {
 
     const completeFromUser = (user) => {
       DB.completeOnboarding({ name: user.displayName || (user.email ? user.email.split('@')[0] : 'You'), email: user.email || '' });
@@ -788,7 +930,7 @@ const UI = (() => {
   // sign-in was cancelled or handed off to a redirect (which navigates
   // away and resolves later via getRedirectResult in guardOnboarding).
   // Throws an Error with a user-facing .message on real failures.
-  async function googleSignIn() {
+  async function googleSignIn(intent) {
     if (typeof firebase === 'undefined') throw new Error('Firebase isn\u2019t configured yet \u2014 see firebase-config.js.');
 
     const isNativeApp = typeof window.Capacitor !== 'undefined' && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform();
@@ -804,16 +946,23 @@ const UI = (() => {
       // involved at all, then hand that token to the Firebase JS SDK.
       const plugin = window.Capacitor.Plugins && window.Capacitor.Plugins.FirebaseAuthentication;
       if (!plugin) throw new Error('Native Google sign-in isn\u2019t set up yet.');
+      // Clear any cached native Google session first so Google's account
+      // chooser ALWAYS appears -- the person picks an account themselves,
+      // like a brand-new user, instead of being silently signed in.
+      if (plugin.signOut) { try { await plugin.signOut(); } catch (e) { /* not signed in natively */ } }
       const result = await plugin.signInWithGoogle();
       const idToken = result.credential && result.credential.idToken;
       if (!idToken) throw new Error('Google sign-in didn\u2019t return a token.');
       const credential = firebase.auth.GoogleAuthProvider.credential(idToken);
       const userCred = await firebase.auth().signInWithCredential(credential);
-      return userCred.user;
+      return await finishGoogleSignIn(userCred, intent);
     }
 
     // Browser / PWA: popup with redirect fallback works fine here.
     const provider = new firebase.auth.GoogleAuthProvider();
+    // Always show Google's account chooser instead of reusing the last
+    // account automatically.
+    provider.setCustomParameters({ prompt: 'select_account' });
     try {
       // Try a popup first on every device. Redirect-based sign-in relies
       // on a background connection to the Firebase authDomain to relay
@@ -823,7 +972,7 @@ const UI = (() => {
       // Popups avoid that relay and are reliable as long as they're
       // triggered directly from this click handler, which this is.
       const result = await firebase.auth().signInWithPopup(provider);
-      return result.user;
+      return await finishGoogleSignIn(result, intent);
     } catch (e) {
       if (e && (e.code === 'auth/popup-blocked' || e.code === 'auth/operation-not-supported-in-this-environment')) {
         // Genuine popup block (rare, but happens in some in-app browsers)
@@ -834,6 +983,125 @@ const UI = (() => {
       if (e && (e.code === 'auth/cancelled-popup-request' || e.code === 'auth/popup-closed-by-user')) return null; // user closed/re-opened it; no error needed
       throw e;
     }
+  }
+
+  // Google has no separate "sign in" and "sign up": Firebase silently creates
+  // an account the first time any Google account signs in. That is how a
+  // DELETED account came back as a fresh empty one with no warning. Firebase
+  // does tell us when it just created a brand-new user (isNewUser), so:
+  //   - intent 'signup' (person chose "Create account")   -> fine, keep it
+  //   - intent 'signin' (person chose "Sign in")          -> ask first; if they
+  //        say no, delete the just-created user again so nothing is left over
+  //   - intent 'reauth' (confirming a deletion)           -> never allowed to
+  //        create anything; discard it and report the wrong-account problem
+  // A tiny note on this device: "this Google account was created by a
+  // sign-in attempt the person then declined / interrupted -- remove it".
+  // It exists from the moment such an account is detected until its
+  // deletion is CONFIRMED, so a dropped connection or a closed app can't
+  // leave the unused account forgotten.
+  const PENDING_DISCARD_KEY = 'daynote.pendingDiscard';
+  function readPendingDiscard() {
+    try { return JSON.parse(localStorage.getItem(PENDING_DISCARD_KEY) || 'null'); } catch (e) { return null; }
+  }
+  function setPendingDiscard(user) {
+    try { localStorage.setItem(PENDING_DISCARD_KEY, JSON.stringify({ uid: user.uid, email: user.email || '', at: Date.now() })); } catch (e) { /* storage unavailable */ }
+  }
+  function clearPendingDiscard() {
+    try { localStorage.removeItem(PENDING_DISCARD_KEY); } catch (e) { /* ignore */ }
+  }
+
+  // Deletes the just-created Firebase user, retrying a few times if the
+  // connection is flaky, then signs out. Returns true once it is really gone.
+  // If it still can't be deleted, the note above stays so it is finished
+  // later (next launch, or the next time this Google account signs in).
+  async function discardNewGoogleUser(user) {
+    setPendingDiscard(user);
+    let deleted = false;
+    for (let attempt = 0; attempt < 3 && !deleted; attempt++) {
+      try { await user.delete(); deleted = true; }
+      catch (e) {
+        const code = (e && e.code) || '';
+        if (code === 'auth/user-not-found') { deleted = true; break; }      // already gone
+        if (code === 'auth/requires-recent-login') break;                   // retrying can't help
+        await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));       // brief pause, then retry
+      }
+    }
+    if (deleted) clearPendingDiscard();
+    // Never leave the person signed in as an account they just declined.
+    const nativeAuth = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.FirebaseAuthentication;
+    if (nativeAuth && nativeAuth.signOut) { try { await nativeAuth.signOut(); } catch (e) { /* ignore */ } }
+    try { await firebase.auth().signOut(); } catch (e) { /* ignore */ }
+    return deleted;
+  }
+
+  // Runs at launch (before the sign-in screen): if a previous attempt was
+  // interrupted while its account was still signed in, finish removing it.
+  async function cleanupPendingDiscard() {
+    const pending = readPendingDiscard();
+    if (!pending || typeof firebase === 'undefined' || !firebase.auth) return;
+    try {
+      const auth = firebase.auth();
+      const user = auth.currentUser || await new Promise((resolve) => {
+        let unsub = null, done = false;
+        const finish = (u) => { if (done) return; done = true; clearTimeout(t); if (unsub) unsub(); resolve(u); };
+        const t = setTimeout(() => finish(null), 4000);
+        unsub = auth.onAuthStateChanged(finish, () => finish(null));
+        if (done && unsub) unsub();
+      });
+      if (user && user.uid === pending.uid) await discardNewGoogleUser(user);
+    } catch (e) { /* try again next launch */ }
+  }
+
+  function askCreateGoogleAccount(email) {
+    return new Promise((resolve) => {
+      const old = $('#googlenew-modal-scrim');
+      if (old) old.remove();
+      const scrim = document.createElement('div');
+      scrim.className = 'modal-scrim';
+      scrim.id = 'googlenew-modal-scrim';
+      scrim.style.zIndex = '1000'; // above the full-screen sign-in overlay
+      scrim.innerHTML = `
+        <div class="modal">
+          <div class="modal-head"><h2 class="font-display">No account found</h2></div>
+          <p style="color:var(--ink-soft);font-size:.88rem;line-height:1.5;margin:0 0 18px;">
+            There is no DayNote account for <b id="googlenew-email"></b> \u2014 it may have been deleted. Do you want to create a new account with it?
+          </p>
+          <div class="btn-row">
+            <button type="button" class="btn ghost" id="googlenew-cancel">Cancel</button>
+            <button type="button" class="btn" style="background:var(--calendar);" id="googlenew-create">Create new account</button>
+          </div>
+        </div>`;
+      document.body.appendChild(scrim);
+      $('#googlenew-email').textContent = email || 'this Google account';
+      let settled = false;
+      const settle = (v) => { if (settled) return; settled = true; obs.disconnect(); scrim.remove(); resolve(v); };
+      // Escape closes every open modal without calling us -- treat that as Cancel.
+      const obs = new MutationObserver(() => { if (!scrim.classList.contains('open')) settle(false); });
+      obs.observe(scrim, { attributes: true, attributeFilter: ['class'] });
+      $('#googlenew-cancel').onclick = () => settle(false);
+      $('#googlenew-create').onclick = () => settle(true);
+      openModal('#googlenew-modal-scrim');
+    });
+  }
+
+  async function finishGoogleSignIn(cred, intent) {
+    const user = cred.user;
+    // "New" = Firebase just created it, OR it is the unused account left
+    // behind by an earlier declined attempt whose deletion never finished.
+    const pending = readPendingDiscard();
+    const isLeftover = !!(pending && pending.uid === user.uid);
+    const isNew = !!(cred.additionalUserInfo && cred.additionalUserInfo.isNewUser) || isLeftover;
+    if (!isNew) return user;
+    if (intent === 'signup') { clearPendingDiscard(); return user; }
+    if (intent === 'reauth') {
+      await discardNewGoogleUser(user);
+      throw new Error('That Google account isn\u2019t the one you\u2019re deleting. Pick the same account you signed up with.');
+    }
+    setPendingDiscard(user); // stays until the choice below is settled
+    if (await askCreateGoogleAccount(user.email)) { clearPendingDiscard(); return user; }
+    const deleted = await discardNewGoogleUser(user);
+    if (!deleted) showToast('Almost done', 'We\u2019ll finish removing that unused account the next time you open DayNote.');
+    return null; // declined: stay on the sign-in screen
   }
 
   function buildOnboardingOverlay(onDone) {
@@ -878,7 +1146,7 @@ const UI = (() => {
 
     $('#onboard-google-btn', overlay).onclick = async () => {
       try {
-        const user = await googleSignIn();
+        const user = await googleSignIn(mode);
         if (user) finishWithFirebaseUser(user);
       } catch (e) {
         showError(e.message || 'Google sign-in failed.');
@@ -897,7 +1165,7 @@ const UI = (() => {
           : await firebase.auth().createUserWithEmailAndPassword(email, password);
         finishWithFirebaseUser(cred.user);
       } catch (e) {
-        showError(e.message || 'Sign-in failed.');
+        showError(friendlyAuthMessage(e, mode));
       }
     };
 
