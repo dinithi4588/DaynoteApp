@@ -73,6 +73,58 @@ Pages.notes = (() => {
     { id: 'lined', label: 'Lined Paper' },
     { id: 'grid', label: 'Grid Paper' },
   ];
+  // CSS for each paper pattern's dot/line/grid overlay, as one or more
+  // background-image layers. Kept in JS (not just the .pattern-X CSS
+  // classes in styles.css) so the pattern can be layered together with a
+  // page's own color or photo background via combinedBackground() below —
+  // a plain CSS class can't do that once an inline background-image (a
+  // themed cover's art, or an uploaded photo) is set, since the inline
+  // style always wins over the class for the same property.
+  const PATTERN_LAYERS = {
+    dotted: { images: ['radial-gradient(var(--rule) 1.1px, transparent 1.6px)'], sizes: ['18px 18px'] },
+    lined: { images: ['repeating-linear-gradient(to bottom, transparent 0 27px, var(--rule) 27px 28px)'], sizes: ['auto'] },
+    grid: {
+      images: [
+        'repeating-linear-gradient(to right, var(--rule) 0 1px, transparent 1px 18px)',
+        'repeating-linear-gradient(to bottom, var(--rule) 0 1px, transparent 1px 18px)',
+      ],
+      sizes: ['auto', 'auto'],
+    },
+    blank: { images: [], sizes: [] },
+  };
+  // Merges a page's paper pattern (dots/lines/grid) with its own color or
+  // photo background into one set of CSS background-* values, so a themed
+  // or custom-background page still shows its pattern instead of the
+  // pattern only ever working on an otherwise-empty page. Used by both the
+  // live editor frame and every small page preview (rail chips, template
+  // tiles, My Journals / Continue-writing cards) so they all render
+  // exactly what's saved.
+  function combinedBackground(patternId, bg) {
+    const pat = PATTERN_LAYERS[patternId || 'dotted'] || PATTERN_LAYERS.blank;
+    const images = [...pat.images];
+    const sizes = [...pat.sizes];
+    const positions = pat.images.map(() => '0 0');
+    const repeats = pat.images.map(() => 'repeat');
+    let color = '';
+
+    if (bg && bg.type === 'image') {
+      if (bg.wash) { images.push(`linear-gradient(${bg.wash}, ${bg.wash})`); sizes.push('cover'); positions.push('center'); repeats.push('no-repeat'); }
+      images.push(`url("${bg.value}")`); sizes.push('cover'); positions.push('center'); repeats.push('no-repeat');
+      color = bg.color || '';
+    } else if (bg && bg.type === 'color') {
+      color = bg.value;
+    } else if (typeof bg === 'string' && bg) {
+      color = bg; // legacy plain-hex background from older saved records
+    }
+
+    return {
+      backgroundImage: images.length ? images.join(', ') : '',
+      backgroundSize: sizes.length ? sizes.join(', ') : '',
+      backgroundPosition: positions.length ? positions.join(', ') : '',
+      backgroundRepeat: repeats.length ? repeats.join(', ') : '',
+      backgroundColor: color,
+    };
+  }
   const ZOOM_KEY = 'daynote.noteZoom';
   const ZOOM_MIN = 1, ZOOM_MAX = 4; // never below 100% — the page must always fill its A4 box
   const UNDO_MAX = 30;
@@ -189,15 +241,9 @@ Pages.notes = (() => {
   // line/grid pattern. For an image background, `color` (when present) is
   // applied underneath as a fallback so the preview still looks intentional
   // if the image can't load (offline, blocked, etc.).
-  function pageBgStyle(bg) {
-    if (!bg) return '';
-    if (typeof bg === 'string') return `background-color:${bg};`;
-    if (bg.type === 'color') return `background-color:${bg.value};`;
-    if (bg.type === 'image') {
-      const wash = bg.wash ? `linear-gradient(${bg.wash}, ${bg.wash}),` : '';
-      return `background-image:${wash}url('${bg.value}');background-size:cover;background-position:center;${bg.color ? `background-color:${bg.color};` : ''}`;
-    }
-    return '';
+  function pageBgStyle(bg, pattern) {
+    const css = combinedBackground(pattern, bg);
+    return `background-image:${css.backgroundImage};background-size:${css.backgroundSize};background-position:${css.backgroundPosition};background-repeat:${css.backgroundRepeat};${css.backgroundColor ? `background-color:${css.backgroundColor};` : ''}`;
   }
   function normalizeNote(note) {
     if (note.pages && note.pages.length) {
@@ -263,7 +309,7 @@ Pages.notes = (() => {
         ${mostRecent ? `
         <p class="journal-section-label">Continue writing</p>
         <div class="continue-card" id="continue-card">
-          <div class="continue-card-thumb pattern-${mostRecent.pages[0]?.pattern || 'dotted'}" style="${pageBgStyle(mostRecent.pages[0]?.background)}"></div>
+          <div class="continue-card-thumb pattern-${mostRecent.pages[0]?.pattern || 'dotted'}" style="${pageBgStyle(mostRecent.pages[0]?.background, mostRecent.pages[0]?.pattern)}"></div>
           <div class="continue-card-body">
             <div class="continue-card-title">${UI.escapeHtml(mostRecent.title || 'Untitled')}</div>
             <div class="continue-card-meta">Last edited ${formatWhen(mostRecent.updatedAt || mostRecent.createdAt)}</div>
@@ -303,7 +349,7 @@ Pages.notes = (() => {
           card.className = 'note-card shelf-card';
           const d = new Date(n.updatedAt || n.createdAt);
           card.innerHTML = `
-            <div class="note-card-thumb pattern-${firstPage.pattern || 'dotted'}" style="${pageBgStyle(firstPage.background)}"></div>
+            <div class="note-card-thumb pattern-${firstPage.pattern || 'dotted'}" style="${pageBgStyle(firstPage.background, firstPage.pattern)}"></div>
             <div class="note-title">${UI.escapeHtml(n.title || 'Untitled')}</div>
             <div class="note-snippet">${UI.escapeHtml(preview)}</div>
             <div class="note-meta">${note.pages.length} page${note.pages.length === 1 ? '' : 's'} &middot; ${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</div>
@@ -322,7 +368,7 @@ Pages.notes = (() => {
         const tile = document.createElement('button');
         tile.type = 'button';
         tile.className = 'tpl-tile shelf-tpl-tile';
-        tile.innerHTML = `<div class="tpl-tile-preview pattern-${t.pattern}" style="${pageBgStyle(t.background)}"></div><span class="tpl-tile-label">${t.label}</span>`;
+        tile.innerHTML = `<div class="tpl-tile-preview pattern-${t.pattern}" style="${pageBgStyle(t.background, t.pattern)}"></div><span class="tpl-tile-label">${t.label}</span>`;
         tile.onclick = () => createFromTemplate(t.id);
         templatesShelf.appendChild(tile);
       });
@@ -376,7 +422,7 @@ Pages.notes = (() => {
         const tile = document.createElement('button');
         tile.type = 'button';
         tile.className = 'tpl-tile';
-        tile.innerHTML = `<div class="tpl-tile-preview pattern-${t.pattern}" style="${pageBgStyle(t.background)}"></div><span class="tpl-tile-label">${t.label}</span>`;
+        tile.innerHTML = `<div class="tpl-tile-preview pattern-${t.pattern}" style="${pageBgStyle(t.background, t.pattern)}"></div><span class="tpl-tile-label">${t.label}</span>`;
         tile.onclick = () => createFromTemplate(t.id);
         themeRow.appendChild(tile);
       });
@@ -802,27 +848,12 @@ Pages.notes = (() => {
 
       function applyPatternAndBackground(frame, pageData) {
         PATTERNS.forEach(p => frame.classList.remove('pattern-' + p.id));
-        frame.classList.add('pattern-' + (pageData.pattern || 'dotted'));
-        const bg = pageData.background;
-        if (bg && bg.type === 'image') {
-          // Cover templates layer a soft, semi-transparent tint (`wash`)
-          // over their botanical photo so it reads as pale and dreamy
-          // instead of a stark high-contrast picture, and stays legible
-          // under the title text.
-          const wash = bg.wash ? `linear-gradient(${bg.wash}, ${bg.wash}), ` : '';
-          frame.style.backgroundImage = `${wash}url("${bg.value}")`;
-          frame.style.backgroundSize = 'cover';
-          frame.style.backgroundPosition = 'center';
-          // A tinted fallback (used by cover templates) shows through if the
-          // image is slow or fails to load, instead of leaving the page white.
-          frame.style.backgroundColor = bg.color || '';
-        } else if (bg && bg.type === 'color') {
-          frame.style.backgroundImage = '';
-          frame.style.backgroundColor = bg.value;
-        } else {
-          frame.style.backgroundImage = '';
-          frame.style.backgroundColor = '';
-        }
+        const css = combinedBackground(pageData.pattern, pageData.background);
+        frame.style.backgroundImage = css.backgroundImage;
+        frame.style.backgroundSize = css.backgroundSize;
+        frame.style.backgroundPosition = css.backgroundPosition;
+        frame.style.backgroundRepeat = css.backgroundRepeat;
+        frame.style.backgroundColor = css.backgroundColor;
       }
 
       function renderActivePage() {
@@ -841,7 +872,7 @@ Pages.notes = (() => {
         updateFitScale();
         activeCanvas = JournalCanvas.mount(
           frame,
-          { elements: pageData.elements, drawing: pageData.drawing },
+          { elements: pageData.elements, drawing: pageData.drawing, pattern: pageData.pattern },
           {
             onElementsChange: (els) => { pushUndo(); pageData.elements = els; scheduleSave(); },
             onDrawingChange: (dataUrl) => { pushUndo(); pageData.drawing = dataUrl; scheduleSave(); },
@@ -877,7 +908,7 @@ Pages.notes = (() => {
           const chip = document.createElement('button');
           chip.type = 'button';
           chip.className = 'page-chip' + (i === activeIndex ? ' active' : '');
-          const bgStyle = pageBgStyle(p.background);
+          const bgStyle = pageBgStyle(p.background, p.pattern);
           chip.innerHTML = `
             <div class="page-chip-thumb pattern-${p.pattern || 'dotted'}" style="${bgStyle}"></div>
             <span class="page-chip-num">${i + 1}</span>
@@ -911,11 +942,12 @@ Pages.notes = (() => {
         pushUndo();
         // Themed journals (Bloom, Tides, Terra, ...) keep using that theme's
         // quiet "content" art on every page added afterwards, not just the
-        // one content page the template started with — so the paper-style
-        // choice from the popover is skipped in favor of staying on-theme.
+        // one content page the template started with \u2014 but the paper
+        // pattern you pick in the popover (dotted/lined/grid/blank) still
+        // applies on top of it, instead of always forcing a blank page.
         const themeCat = note.themeId && CoverArt.categories[note.themeId];
         if (themeCat) {
-          pages.push({ id: uid('p'), elements: [], drawing: null, background: themeCat.content, pattern: 'blank' });
+          pages.push({ id: uid('p'), elements: [], drawing: null, background: themeCat.content, pattern: pattern || 'blank' });
         } else {
           pages.push({ id: uid('p'), elements: [], drawing: null, background: null, pattern: pattern || 'dotted' });
         }
@@ -995,10 +1027,16 @@ Pages.notes = (() => {
         btn.onclick = () => {
           bgPop.classList.remove('open');
           pushUndo();
-          pages[activeIndex].pattern = btn.dataset.bgPattern;
-          pages[activeIndex].background = null;
-          applyPatternAndBackground($('#page-frame'), pages[activeIndex]);
-          renderRail();
+          const pg = pages[activeIndex];
+          pg.pattern = btn.dataset.bgPattern;
+          pg.background = null;
+          // An empty free-writing area belongs to the old ruling; drop it so
+          // the new paper starts clean. (One with text in it is kept.)
+          pg.elements = (pg.elements || []).filter(el => !(el.ruled && !(el.content || '').replace(/<[^>]+>|&nbsp;/g, '').trim()));
+          // Re-mount rather than just repaint: the canvas decides whether
+          // tapping the page starts free writing from the pattern it was
+          // mounted with, so it has to be told the new one.
+          renderActivePage();
           scheduleSave();
         };
       });
