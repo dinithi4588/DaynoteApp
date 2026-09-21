@@ -372,9 +372,10 @@ const UI = (() => {
       closeAllPopovers();
       showConfirm({
         title: 'Sign out of DayNote?', body: 'You can sign back in any time.', confirmLabel: 'Sign out',
-        onConfirm: () => {
-          DB.signOut();
-          showToast('Signed out', 'Backend not connected yet \u2014 this is a placeholder action.');
+        onConfirm: async () => {
+          await DB.signOut();
+          showToast('Signed out', 'Your data stays on this device. Sign in again to continue.');
+          setTimeout(() => location.reload(), 600); // reload shows the sign-in screen
         },
       });
     };
