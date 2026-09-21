@@ -30,6 +30,10 @@ const JournalCanvas = (() => {
   // lands its lines right on the page's own ruling, like handwriting in a
   // real ruled notebook, instead of at the browser's default line-height.
   const RULE_LINE_HEIGHT = { dotted: 18, lined: 28, grid: 18 };
+  // Lined paper's rules sit inside these page margins (see LINED_INSET in
+  // pages_notes.js -- keep the two identical) so writing stays inside the
+  // page's outer border / cover-art frame.
+  const LINED_INSET = { top: 40, right: 28, bottom: 40, left: 28 };
 
   // Free "write on the lines" surface is for LINED paper only. Everything
   // the writing area needs to look/behave like ink on ruled paper lives in
@@ -366,14 +370,27 @@ const JournalCanvas = (() => {
     // drawn rule), instead of needing "Add text" then manually resizing
     // and positioning a box every time. Still a normal box afterwards
     // (draggable/resizable/deletable) if you want to adjust it.
+    // Where the writing area sits: exactly on the inset ruled region, a whole
+    // number of lines tall.
+    function ruledGeometry() {
+      const W = frameEl.offsetWidth || 340;
+      const H = frameEl.offsetHeight || 481;
+      const lh = RULE_LINE_HEIGHT.lined;
+      return {
+        x: LINED_INSET.left,
+        y: LINED_INSET.top,
+        w: Math.max(60, W - LINED_INSET.left - LINED_INSET.right),
+        h: Math.floor((H - LINED_INSET.top - LINED_INSET.bottom) / lh) * lh,
+      };
+    }
+
     function addWritingArea() {
       if (pattern !== 'lined') return null; // free writing is for lined paper only
-      const w = frameEl.offsetWidth || 340;
-      const h = frameEl.offsetHeight || 480;
+      const g = ruledGeometry();
       const lh = RULE_LINE_HEIGHT[pattern] || 22;
       const fontSize = Math.max(12, Math.round(lh * 0.62));
       const data = {
-        id: uid(), type: 'text', x: 18, y: 0, w: Math.max(60, w - 36), h,
+        id: uid(), type: 'text', x: g.x, y: g.y, w: g.w, h: g.h,
         rot: 0, font: "'Patrick Hand', cursive", fontSize, lineHeight: lh,
         align: 'left', content: '', ruled: true,
       };
@@ -663,7 +680,11 @@ const JournalCanvas = (() => {
     function getDrawTool() { return drawTool; }
 
     // ---- init from saved data ----
-    (initialElements || []).forEach(data => addBox(data));
+    (initialElements || []).forEach(data => {
+      // Writing areas saved before the lines were inset get moved onto the new ruled region.
+      if (data.ruled && pattern === 'lined') Object.assign(data, ruledGeometry());
+      addBox(data);
+    });
     ensureDrawCanvas();
     if (initialDrawing) loadDrawing(initialDrawing);
 
