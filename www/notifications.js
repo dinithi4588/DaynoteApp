@@ -38,9 +38,41 @@ const Reminders = (() => {
     return Math.abs(hash) % 2147483647;
   }
 
+  // Android channel used for reminder alarms. Its importance is what
+  // controls whether a notification pops up on screen (a "heads-up"
+  // banner) when it fires, separately from whether it shows up in the
+  // notification list/lock screen/badge:
+  //   IMPORTANCE_DEFAULT (3) -> list, lock screen and badge all work,
+  //     but nothing pops up — this was the plugin's built-in "default"
+  //     channel, which is what DayNote was using.
+  //   IMPORTANCE_HIGH (4) or IMPORTANCE_MAX (5) -> also pops up / plays
+  //     a heads-up banner over whatever the user is doing.
+  // Once a channel is created on a device, Android locks its importance
+  // — recreating it with a different importance value has no effect, so
+  // reinstalling the app (or changing the channel's id) is what's needed
+  // to pick up this change on a device that already has the old channel.
+  const REMINDER_CHANNEL_ID = 'reminders';
+  let reminderChannelReady = false;
+
+  async function ensureReminderChannel(plugin) {
+    if (reminderChannelReady) return;
+    try {
+      await plugin.createChannel({
+        id: REMINDER_CHANNEL_ID,
+        name: 'Reminders',
+        description: 'Event and task reminders',
+        importance: 5, // IMPORTANCE_MAX — required for the pop-up/heads-up banner
+        visibility: 1, // VISIBILITY_PUBLIC — show full content on the lock screen
+        vibration: true,
+      });
+    } catch (e) { console.error('DayNote: could not create reminder channel', e); }
+    reminderChannelReady = true;
+  }
+
   async function ensureNativePermission() {
     const plugin = nativePlugin();
     if (!plugin) return false;
+    await ensureReminderChannel(plugin);
     const check = await plugin.checkPermissions();
     if (check.display === 'granted') return true;
     const req = await plugin.requestPermissions();
@@ -63,6 +95,7 @@ const Reminders = (() => {
           id: toNativeId(itemId),
           title,
           body,
+          channelId: REMINDER_CHANNEL_ID,
           // allowWhileIdle makes the plugin use setExactAndAllowWhileIdle
           // (RTC_WAKEUP). Without it the plugin uses a non-wakeup alarm
           // (setExact + RTC), so a sleeping phone only shows the
