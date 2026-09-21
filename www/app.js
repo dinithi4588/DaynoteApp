@@ -11,7 +11,7 @@ const THEMES = [
   { id: "dark", name: "Dark", swatch: ["#000000", "#FFFFFF", "#F2F2F2"] },
   { id: "maroon", name: "Maroon", swatch: ["#F7ECEA", "#7A2E2E", "#2E1918"] },
   { id: "coffee", name: "Coffee", swatch: ["#EFE4D8", "#5C3A22", "#2C1D12"] },
-  { id: "sage", name: "Sage", swatch: ["#F1F2EC", "#3E6249", "#2A2E27"] },
+  { id: "sage", name: "Sage", swatch: ["#F1F2EC", "#7C7248", "#2A2E27"] },
 ];
 
 // Each item is one of the four real pages. `href` is the actual
@@ -487,16 +487,23 @@ const UI = (() => {
           <button class="icon-btn" id="addaccount-modal-close" aria-label="Close">&#10005;</button>
         </div>
         <p style="color:var(--ink-soft);font-size:.82rem;line-height:1.5;margin:0 0 16px;">
-          No server yet, so this just saves another local profile you can switch to \u2014 your calendar, tasks, finance and journal entries stay shared on this device across accounts.
+          Sign in with a real account to switch to it \u2014 your calendar, tasks, finance and journal entries stay shared on this device across accounts.
         </p>
+        <button type="button" class="btn" id="addaccount-google-btn" style="width:100%;background:#fff;color:#1f1f1f;border:1px solid #dadce0;display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:14px;">
+          <svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84c-.21 1.13-.84 2.08-1.8 2.72v2.26h2.92c1.7-1.57 2.68-3.87 2.68-6.62z"/><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.81.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.03-3.7H.97v2.33C2.45 15.98 5.48 18 9 18z"/><path fill="#FBBC05" d="M3.97 10.72c-.18-.54-.28-1.12-.28-1.72s.1-1.18.28-1.72V4.95H.97C.35 6.18 0 7.55 0 9s.35 2.82.97 4.05l3-2.33z"/><path fill="#EA4335" d="M9 3.58c1.32 0 2.51.46 3.44 1.35l2.59-2.59C13.46.89 11.43 0 9 0 5.48 0 2.45 2.02.97 4.95l3 2.33C4.68 5.16 6.66 3.58 9 3.58z"/></svg>
+          Continue with Google
+        </button>
+        <div class="onboard-divider"><span>or</span></div>
         <form id="addaccount-form">
-          <div class="field"><label for="addaccount-name">Name</label><input type="text" id="addaccount-name" required /></div>
           <div class="field"><label for="addaccount-email">Email</label><input type="email" id="addaccount-email" required /></div>
+          <div class="field"><label for="addaccount-password">Password</label><input type="password" id="addaccount-password" required minlength="6" /></div>
+          <div class="applock-error" id="addaccount-error" style="display:none;"></div>
           <div class="btn-row">
             <button type="button" class="btn ghost" id="addaccount-cancel">Cancel</button>
-            <button type="submit" class="btn" style="background:var(--calendar);">Add</button>
+            <button type="submit" class="btn" style="background:var(--calendar);" id="addaccount-submit-btn">Sign in</button>
           </div>
         </form>
+        <button type="button" class="onboard-skip" id="addaccount-toggle-mode">Don\u2019t have an account? Create one</button>
       </div>`;
     document.body.appendChild(scrim);
     $('#addaccount-modal-close').onclick = () => closeModal('#addaccount-modal-scrim');
@@ -504,17 +511,60 @@ const UI = (() => {
   }
   function openAddAccountForm(onAdded) {
     buildAddAccountModalOnce();
-    $('#addaccount-name').value = '';
+
+    let mode = 'signin'; // or 'signup'
+    const errEl = $('#addaccount-error');
+    const showError = (msg) => { errEl.textContent = msg; errEl.style.display = 'block'; };
+    errEl.style.display = 'none';
     $('#addaccount-email').value = '';
-    $('#addaccount-form').onsubmit = (e) => {
-      e.preventDefault();
-      DB.addAccount({ name: $('#addaccount-name').value.trim(), email: $('#addaccount-email').value.trim() });
+    $('#addaccount-password').value = '';
+    $('#addaccount-submit-btn').textContent = 'Sign in';
+    $('#addaccount-toggle-mode').textContent = 'Don\u2019t have an account? Create one';
+
+    // This really signs in/creates a Firebase user (same as the onboarding
+    // screen) instead of just saving a name/email locally, so "Add account"
+    // switches Firebase's active session too, not just the display name.
+    const finishWithFirebaseUser = (user) => {
+      DB.completeOnboarding({ name: user.displayName || (user.email ? user.email.split('@')[0] : 'You'), email: user.email || '' });
       closeModal('#addaccount-modal-scrim');
       showToast('Account added', 'Switched to the new account.');
       onAdded && onAdded();
     };
+
+    $('#addaccount-toggle-mode').onclick = () => {
+      mode = mode === 'signin' ? 'signup' : 'signin';
+      $('#addaccount-submit-btn').textContent = mode === 'signin' ? 'Sign in' : 'Create account';
+      $('#addaccount-toggle-mode').textContent = mode === 'signin' ? 'Don\u2019t have an account? Create one' : 'Already have an account? Sign in';
+      errEl.style.display = 'none';
+    };
+
+    $('#addaccount-google-btn').onclick = async () => {
+      try {
+        const user = await googleSignIn();
+        if (user) finishWithFirebaseUser(user);
+      } catch (e) {
+        showError(e.message || 'Google sign-in failed.');
+      }
+    };
+
+    $('#addaccount-form').onsubmit = async (e) => {
+      e.preventDefault();
+      errEl.style.display = 'none';
+      const email = $('#addaccount-email').value.trim();
+      const password = $('#addaccount-password').value;
+      if (typeof firebase === 'undefined') { showError('Firebase isn\u2019t configured yet \u2014 see firebase-config.js.'); return; }
+      try {
+        const cred = mode === 'signin'
+          ? await firebase.auth().signInWithEmailAndPassword(email, password)
+          : await firebase.auth().createUserWithEmailAndPassword(email, password);
+        finishWithFirebaseUser(cred.user);
+      } catch (e) {
+        showError(e.message || 'Sign-in failed.');
+      }
+    };
+
     openModal('#addaccount-modal-scrim');
-    setTimeout(() => $('#addaccount-name')?.focus(), 50);
+    setTimeout(() => $('#addaccount-email')?.focus(), 50);
   }
 
   // ---------------- Backup / restore + App lock menu items ----------------
@@ -732,6 +782,60 @@ const UI = (() => {
     }
   }
 
+  // Shared Google sign-in flow, used by both the onboarding screen and
+  // "Add account" in Settings so a real Firebase account can be created
+  // from either place. Returns the Firebase user on success, or null if
+  // sign-in was cancelled or handed off to a redirect (which navigates
+  // away and resolves later via getRedirectResult in guardOnboarding).
+  // Throws an Error with a user-facing .message on real failures.
+  async function googleSignIn() {
+    if (typeof firebase === 'undefined') throw new Error('Firebase isn\u2019t configured yet \u2014 see firebase-config.js.');
+
+    const isNativeApp = typeof window.Capacitor !== 'undefined' && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform();
+
+    if (isNativeApp) {
+      // Native Android app: a WebView can't complete Google's OAuth
+      // flow (Google blocks embedded webviews outright), and Capacitor
+      // hands off any external navigation to the system browser instead
+      // \u2014 which then has no way to relay the result back into this
+      // app's own isolated WebView. So instead we go through the native
+      // Google Sign-In SDK (via the Capacitor Firebase plugin), which
+      // returns an ID token straight to this JS code with no browser
+      // involved at all, then hand that token to the Firebase JS SDK.
+      const plugin = window.Capacitor.Plugins && window.Capacitor.Plugins.FirebaseAuthentication;
+      if (!plugin) throw new Error('Native Google sign-in isn\u2019t set up yet.');
+      const result = await plugin.signInWithGoogle();
+      const idToken = result.credential && result.credential.idToken;
+      if (!idToken) throw new Error('Google sign-in didn\u2019t return a token.');
+      const credential = firebase.auth.GoogleAuthProvider.credential(idToken);
+      const userCred = await firebase.auth().signInWithCredential(credential);
+      return userCred.user;
+    }
+
+    // Browser / PWA: popup with redirect fallback works fine here.
+    const provider = new firebase.auth.GoogleAuthProvider();
+    try {
+      // Try a popup first on every device. Redirect-based sign-in relies
+      // on a background connection to the Firebase authDomain to relay
+      // the result back, which modern mobile browsers (Safari's "Prevent
+      // Cross-Site Tracking", Chrome's privacy sandbox) increasingly
+      // block outright \u2014 it fails silently with no error and no user.
+      // Popups avoid that relay and are reliable as long as they're
+      // triggered directly from this click handler, which this is.
+      const result = await firebase.auth().signInWithPopup(provider);
+      return result.user;
+    } catch (e) {
+      if (e && (e.code === 'auth/popup-blocked' || e.code === 'auth/operation-not-supported-in-this-environment')) {
+        // Genuine popup block (rare, but happens in some in-app browsers)
+        // \u2014 fall back to redirect as a last resort.
+        await firebase.auth().signInWithRedirect(provider);
+        return null;
+      }
+      if (e && (e.code === 'auth/cancelled-popup-request' || e.code === 'auth/popup-closed-by-user')) return null; // user closed/re-opened it; no error needed
+      throw e;
+    }
+  }
+
   function buildOnboardingOverlay(onDone) {
     const overlay = document.createElement('div');
     overlay.className = 'applock-overlay';
@@ -773,55 +877,10 @@ const UI = (() => {
     };
 
     $('#onboard-google-btn', overlay).onclick = async () => {
-      if (typeof firebase === 'undefined') { showError('Firebase isn\u2019t configured yet \u2014 see firebase-config.js.'); return; }
-
-      const isNativeApp = typeof window.Capacitor !== 'undefined' && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform();
-
-      if (isNativeApp) {
-        // Native Android app: a WebView can't complete Google's OAuth
-        // flow (Google blocks embedded webviews outright), and Capacitor
-        // hands off any external navigation to the system browser instead
-        // \u2014 which then has no way to relay the result back into this
-        // app's own isolated WebView. So instead we go through the native
-        // Google Sign-In SDK (via the Capacitor Firebase plugin), which
-        // returns an ID token straight to this JS code with no browser
-        // involved at all, then hand that token to the Firebase JS SDK.
-        const plugin = window.Capacitor.Plugins && window.Capacitor.Plugins.FirebaseAuthentication;
-        if (!plugin) { showError('Native Google sign-in isn\u2019t set up yet.'); return; }
-        try {
-          const result = await plugin.signInWithGoogle();
-          const idToken = result.credential && result.credential.idToken;
-          if (!idToken) { showError('Google sign-in didn\u2019t return a token.'); return; }
-          const credential = firebase.auth.GoogleAuthProvider.credential(idToken);
-          const userCred = await firebase.auth().signInWithCredential(credential);
-          finishWithFirebaseUser(userCred.user);
-        } catch (e) {
-          showError(e.message || 'Google sign-in failed.');
-        }
-        return;
-      }
-
-      // Browser / PWA: popup with redirect fallback works fine here.
-      const provider = new firebase.auth.GoogleAuthProvider();
       try {
-        // Try a popup first on every device. Redirect-based sign-in relies
-        // on a background connection to the Firebase authDomain to relay
-        // the result back, which modern mobile browsers (Safari's "Prevent
-        // Cross-Site Tracking", Chrome's privacy sandbox) increasingly
-        // block outright \u2014 it fails silently with no error and no user.
-        // Popups avoid that relay and are reliable as long as they're
-        // triggered directly from this click handler, which this is.
-        const result = await firebase.auth().signInWithPopup(provider);
-        finishWithFirebaseUser(result.user);
+        const user = await googleSignIn();
+        if (user) finishWithFirebaseUser(user);
       } catch (e) {
-        if (e && (e.code === 'auth/popup-blocked' || e.code === 'auth/operation-not-supported-in-this-environment')) {
-          // Genuine popup block (rare, but happens in some in-app browsers)
-          // \u2014 fall back to redirect as a last resort.
-          try { await firebase.auth().signInWithRedirect(provider); return; }
-          catch (e2) { showError(e2.message || 'Google sign-in failed.'); return; }
-        }
-        if (e && e.code === 'auth/cancelled-popup-request') return; // user opened it twice; ignore
-        if (e && e.code === 'auth/popup-closed-by-user') return; // user closed it; no error needed
         showError(e.message || 'Google sign-in failed.');
       }
     };
