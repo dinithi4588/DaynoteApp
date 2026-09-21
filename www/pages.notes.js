@@ -114,6 +114,67 @@ Pages.notes = (() => {
     },
     blank: { images: [], sizes: [] },
   };
+  // ---- Background COLOUR that keeps the page's design ----
+  // A themed page's art has its paper colour baked in, so simply putting a
+  // colour "behind" it changes nothing you can see. Two ways to change only
+  // the background instead of throwing the design away:
+  //  1) Themes drawn in code (Bloom, Verdant, Meadow, Azure, Palma, Celestia)
+  //     are SVG: the paper is one colour in the drawing, so it is swapped for
+  //     the chosen colour and the flowers/leaves/stars stay exactly as drawn.
+  //  2) Picture themes (Tides, Autumn, Indigo, Terra, Wildwood) and uploaded
+  //     photos are flat images: the chosen colour is multiplied over the
+  //     picture (a tint). The tinted picture is stored as the page's image,
+  //     so thumbnails and PDF export show it too.
+  // The untouched original is kept in `source` (and `paper` for SVGs), so
+  // every new colour starts from the original instead of piling up.
+  const SVG_PREFIX = 'data:image/svg+xml,';
+  // Celestia's night sky is a 3-stop gradient; its other two stops follow the
+  // chosen colour at these brightness ratios so the sky keeps its depth.
+  const SVG_EXTRA_PAPER_STOPS = { '#1b2340': [['#221a3a', 0.93], ['#150f28', 0.62]] };
+  function shadeHex(hex, f) {
+    const c = [1, 3, 5].map(i => Math.max(0, Math.min(255, Math.round(parseInt(hex.slice(i, i + 2), 16) * f))));
+    return '#' + c.map(v => v.toString(16).padStart(2, '0')).join('');
+  }
+  // Returns a new background object with the paper of an SVG design changed
+  // to `hex`, or null when the design isn't one of the drawn SVG themes.
+  function recolorSvgPaper(bg, hex) {
+    const source = bg && (bg.source || bg.value);
+    if (typeof source !== 'string' || !source.startsWith(SVG_PREFIX)) return null;
+    const paper = String(bg.paper || bg.color || '').toLowerCase();
+    if (!/^#[0-9a-f]{6}$/.test(paper)) return null;
+    let svg;
+    try { svg = decodeURIComponent(source.slice(SVG_PREFIX.length)); } catch (e) { return null; }
+    if (svg.search(new RegExp(paper, 'i')) === -1) return null;
+    let out = svg.replace(new RegExp(paper, 'gi'), hex);
+    (SVG_EXTRA_PAPER_STOPS[paper] || []).forEach(([stop, f]) => { out = out.replace(new RegExp(stop, 'gi'), shadeHex(hex, f)); });
+    return { ...bg, source, paper, value: SVG_PREFIX + encodeURIComponent(out), color: hex };
+  }
+  function loadImage(src) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('Could not load the page image.'));
+      img.src = src;
+    });
+  }
+  // Multiplies `hex` over a picture background and returns the new background
+  // object (a JPEG of the tinted picture, at most 1080px wide).
+  async function tintImageBackground(bg, hex) {
+    const source = bg.source || bg.value;
+    const img = await loadImage(source);
+    const scale = Math.min(1, 1080 / img.naturalWidth);
+    const w = Math.max(1, Math.round(img.naturalWidth * scale));
+    const h = Math.max(1, Math.round(img.naturalHeight * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, w, h); // JPEG has no transparency
+    ctx.drawImage(img, 0, 0, w, h);
+    ctx.globalCompositeOperation = 'multiply';
+    ctx.fillStyle = hex; ctx.fillRect(0, 0, w, h);
+    return { ...bg, source, value: canvas.toDataURL('image/jpeg', 0.9), color: hex };
+  }
+
   // Merges a page's paper pattern (dots/lines/grid) with its own color or
   // photo background into one set of CSS background-* values, so a themed
   // or custom-background page still shows its pattern instead of the
@@ -1063,21 +1124,43 @@ Pages.notes = (() => {
         renderRail();
         scheduleSave();
       }
-      bgColorInput.oninput = () => setPageBackground({ type: 'color', value: bgColorInput.value });
+      // Changes the page's background colour WITHOUT removing its design:
+      //  - no design (or a plain colour page): the colour simply is the background;
+      //  - drawn SVG themes: only the paper colour is swapped;
+      //  - picture themes and photos: the colour is multiplied over the picture.
+      let bgColorTimer = null;
+      let bgColorSeq = 0;
+      async function setBackgroundColorKeepingDesign(hex) {
+        const pageIndex = activeIndex;
+        const bg = pages[pageIndex].background;
+        const seq = ++bgColorSeq;
+        if (!bg || typeof bg === 'string' || bg.type !== 'image') { setPageBackground({ type: 'color', value: hex }); return; }
+        const recoloured = recolorSvgPaper(bg, hex);
+        if (recoloured) { setPageBackground(recoloured); return; }
+        try {
+          const tinted = await tintImageBackground(bg, hex);
+          // A newer colour choice, or another page, took over while the picture was being tinted.
+          if (seq !== bgColorSeq || activeIndex !== pageIndex) return;
+          setPageBackground(tinted);
+        } catch (e) { console.error('DayNote: could not tint the page background', e); }
+      }
+      // A short pause so dragging the colour picker doesn't redo the work on every pixel of movement.
+      bgColorInput.oninput = () => {
+        clearTimeout(bgColorTimer);
+        bgColorTimer = setTimeout(() => setBackgroundColorKeepingDesign(bgColorInput.value), 100);
+      };
       bgUploadItem.onclick = () => { bgPop.classList.remove('open'); bgFileInput.click(); };
       bgClearItem.onclick = () => { bgPop.classList.remove('open'); setPageBackground(null); };
-      // Swap this page's paper pattern (blank/dotted/lined/grid) — keeps
-      // every box/text/decoration exactly where it is, same as Clear
-      // background, but also picks which pattern shows once the photo/
-      // color is gone, so a themed cover can become "the same template,
-      // just on dotted paper" in one tap instead of two.
+      // Swap this page's paper pattern (blank/dotted/lined/grid). Only the
+      // ruling changes: the page's design (theme art), colour or photo stays
+      // where it is, and so does every box/text/decoration on it. "Clear
+      // background" is the one button that removes the design/colour.
       bgPop.querySelectorAll('[data-bg-pattern]').forEach(btn => {
         btn.onclick = () => {
           bgPop.classList.remove('open');
           pushUndo();
           const pg = pages[activeIndex];
           pg.pattern = btn.dataset.bgPattern;
-          pg.background = null;
           // An empty free-writing area belongs to the old ruling; drop it so
           // the new paper starts clean. (One with text in it is kept.)
           pg.elements = (pg.elements || []).filter(el => !(el.ruled && !(el.content || '').replace(/<[^>]+>|&nbsp;/g, '').trim()));
@@ -1145,7 +1228,10 @@ Pages.notes = (() => {
 
       const rtColor = $('#rt-color');
       const rtHighlight = $('#rt-highlight');
-      rtColor.oninput = () => activeCanvas?.textColorSelected(rtColor.value);
+      // The chosen text colour is remembered (see JournalCanvas pen colour), so the chip shows it.
+      const rememberedPen = JournalCanvas.getPenColor();
+      if (rememberedPen) rtColor.value = rememberedPen;
+      rtColor.oninput = () => { if (activeCanvas) activeCanvas.textColorSelected(rtColor.value); else JournalCanvas.setPenColor(rtColor.value); };
       rtHighlight.oninput = () => activeCanvas?.highlightSelected(rtHighlight.value);
       const shapeFillChip = $('#shape-fill-chip');
       const shapeBorderChip = $('#shape-border-chip');
