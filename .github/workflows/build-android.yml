@@ -104,6 +104,52 @@ jobs:
             console.log('adaptive launcher icon written');
           })();
           EOF
+      # Without this, LocalNotifications has no icon matching
+      # "ic_stat_daynote" (set as plugins.LocalNotifications.smallIcon in
+      # capacitor.config.json), so the plugin falls back to a generic
+      # system "i" icon in the status bar/notification list instead of
+      # DayNote's own icon. Android's status bar only ever renders the
+      # ALPHA channel of a notification icon (as a solid white shape) --
+      # never its colors -- so this can't just reuse icon-foreground.png
+      # as-is (its whole square, including the maroon background, is
+      # opaque and would show as a solid blob, not a "D"). Instead this
+      # keeps only the pixels matching the light "D" glyph color from
+      # icon-foreground.png and makes everything else fully transparent,
+      # producing a proper white-D-on-transparent silhouette, then
+      # renders that at each density Android expects for a status bar icon.
+      - name: Generate notification icon from icon-foreground.png
+        run: |
+          node <<'EOF'
+          const sharp = require('sharp');
+          const fs = require('fs');
+          const res = 'android/app/src/main/res';
+          const sizes = { mdpi: 24, hdpi: 36, xhdpi: 48, xxhdpi: 72, xxxhdpi: 96 };
+          (async () => {
+            const { data, info } = await sharp('icon-foreground.png')
+              .ensureAlpha()
+              .raw()
+              .toBuffer({ resolveWithObject: true });
+            const out = Buffer.from(data); // copy
+            for (let i = 0; i < out.length; i += 4) {
+              const r = out[i], g = out[i + 1], b = out[i + 2], a = out[i + 3];
+              // "D" glyph pixels are the light cream color (#E4D6CC);
+              // everything else (maroon background, transparent margin)
+              // becomes fully transparent so only the D silhouette remains.
+              const isGlyph = a > 200 && r > 200 && g > 190 && b > 180;
+              out[i] = 255; out[i + 1] = 255; out[i + 2] = 255;
+              out[i + 3] = isGlyph ? 255 : 0;
+            }
+            for (const [density, px] of Object.entries(sizes)) {
+              const dir = res + '/drawable-' + density;
+              fs.mkdirSync(dir, { recursive: true });
+              await sharp(out, { raw: { width: info.width, height: info.height, channels: 4 } })
+                .resize(px, px)
+                .png()
+                .toFile(dir + '/ic_stat_daynote.png');
+            }
+            console.log('notification icon written');
+          })();
+          EOF
       # Uses a fixed debug keystore (committed at repo root as
       # daynote-debug.keystore) instead of the default one Gradle would
       # otherwise auto-generate fresh on every run. Without this, the
