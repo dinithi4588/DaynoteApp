@@ -24,8 +24,36 @@ const JournalCanvas = (() => {
     circle: { label: 'Circle', fill: '#eadff5', border: '#876aa2', radius: '50%' },
   };
 
+  // Matches the rule/dot/grid spacing each paper pattern draws in
+  // styles.css (28px band for lined, 18px grid for dotted/grid), so text
+  // typed into the auto-created writing area (see addWritingArea below)
+  // lands its lines right on the page's own ruling, like handwriting in a
+  // real ruled notebook, instead of at the browser's default line-height.
+  const RULE_LINE_HEIGHT = { dotted: 18, lined: 28, grid: 18 };
+
+  // Free "write on the lines" surface is for LINED paper only. Everything
+  // the writing area needs to look/behave like ink on ruled paper lives in
+  // these rules: no border/background/handles, no margins between lines,
+  // long words wrap, and nothing scrolls (the rules are painted on the page,
+  // so scrolling text would slide off them).
+  function ensureRuledStyles() {
+    if (document.getElementById('journal-ruled-styles')) return;
+    const s = document.createElement('style');
+    s.id = 'journal-ruled-styles';
+    s.textContent = `
+      .canvas-box.ruled-box { border: none !important; background: transparent !important; box-shadow: none !important; outline: none !important; padding: 0 !important; }
+      .canvas-box.ruled-box .canvas-box-content { width: 100%; height: 100%; box-sizing: border-box; margin: 0; padding: 0; border: none; outline: none; background: transparent; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; cursor: text; }
+      .canvas-box.ruled-box .canvas-box-content div,
+      .canvas-box.ruled-box .canvas-box-content p { margin: 0; padding: 0; }
+      .canvas-box.ruled-box .canvas-box-content ul,
+      .canvas-box.ruled-box .canvas-box-content ol { margin: 0; padding-left: 1.4em; }
+      .canvas-box.ruled-box .canvas-box-content li { margin: 0; }
+    `;
+    document.head.appendChild(s);
+  }
+
   function mount(frameEl, initialState, callbacks) {
-    const { elements: initialElements, drawing: initialDrawing } = initialState || {};
+    const { elements: initialElements, drawing: initialDrawing, pattern } = initialState || {};
     const { onElementsChange, onDrawingChange, getZoom, onSelectionChange } = callbacks || {};
     let selectedId = null;
     let activeEditableEl = null; // the contentEditable currently focused, for rich-text commands
@@ -33,6 +61,26 @@ const JournalCanvas = (() => {
                                   // click (e.g. a native color picker) doesn't lose the highlighted text
     const boxes = new Map(); // id -> { el, data }
     const zoomOf = typeof getZoom === 'function' ? getZoom : () => 1;
+    ensureRuledStyles();
+
+    // Nudges the writing area down so the FIRST line's text baseline sits
+    // right on the page's rule (the rule is the last pixel of each 28px
+    // band). Every later line is exactly one line-height further, so they
+    // all sit on their own rule. Measured from the real font, so it stays
+    // correct for every font / size instead of relying on a guessed offset.
+    function alignRuledBaseline(content, data) {
+      if (!content || !content.isConnected || !content.offsetHeight) return;
+      const lh = data.lineHeight || 28;
+      content.style.paddingTop = '0px';
+      const probe = document.createElement('span');
+      probe.style.cssText = 'display:inline-block;width:0;height:0;vertical-align:baseline;';
+      content.insertBefore(probe, content.firstChild);
+      const z = zoomOf() || 1;
+      const base = (probe.getBoundingClientRect().bottom - content.getBoundingClientRect().top) / z;
+      probe.remove();
+      if (!(base > 0)) return;
+      content.style.paddingTop = Math.max(0, Math.round(lh - 1 - base)) + 'px';
+    }
 
     function emitChange() { onElementsChange && onElementsChange(getElements()); }
     function getElements() { return [...boxes.values()].map(b => ({ ...b.data })); }
@@ -143,6 +191,17 @@ const JournalCanvas = (() => {
       s.addRange(r);
     }
 
+    function focusAtEnd(el) {
+      if (!el) return;
+      el.focus();
+      const r = document.createRange();
+      r.selectNodeContents(el);
+      r.collapse(false);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(r);
+    }
+
     function createBoxEl(data) {
       const el = document.createElement('div');
       const kindClass = data.type === 'image' ? 'canvas-box-image'
@@ -169,6 +228,7 @@ const JournalCanvas = (() => {
         content.style.fontFamily = data.font || "'Patrick Hand', cursive";
         content.style.fontSize = (data.fontSize || 16) + 'px';
         content.style.textAlign = data.align || (data.type === 'shape' ? 'center' : 'left');
+        if (data.lineHeight) content.style.lineHeight = data.lineHeight + 'px';
         content.innerHTML = data.content || '';
         content.addEventListener('pointerdown', e => {
           // An empty shape is just a decorative box with nothing typed
@@ -180,12 +240,35 @@ const JournalCanvas = (() => {
           e.stopPropagation();
         });
         content.addEventListener('click', e => handleChecklistClick(e, content, data));
-        content.addEventListener('input', () => { data.content = content.innerHTML; emitChange(); });
+        content.addEventListener('input', () => {
+          // Ruled page is full: like a real page, there's no line below the
+          // last one. Undo whatever was just typed/pasted that spilled over.
+          if (data.ruled && content.scrollHeight > content.clientHeight + 1) {
+            document.execCommand('undo');
+            return;
+          }
+          data.content = content.innerHTML;
+          emitChange();
+        });
         content.addEventListener('focus', () => { select(data.id); activeEditableEl = content; savedRange = null; });
         content.addEventListener('mouseup', () => captureSelectionIfInside(content));
         content.addEventListener('keyup', () => captureSelectionIfInside(content));
         content.addEventListener('touchend', () => captureSelectionIfInside(content));
         el.appendChild(content);
+        if (data.ruled) {
+          // Writing area on lined paper: no drag/rotate/resize/delete
+          // handles (it IS the page), and paste as plain text so pasted
+          // fonts/spacing can't push text off the lines.
+          el.classList.add('ruled-box');
+          content.classList.add('ruled');
+          content.addEventListener('paste', (e) => {
+            e.preventDefault();
+            const text = (e.clipboardData || window.clipboardData).getData('text/plain');
+            document.execCommand('insertText', false, text);
+          });
+          el.addEventListener('pointerdown', () => select(data.id));
+          return el;
+        }
       } else if (data.type === 'deco') {
         el.style.opacity = data.opacity != null ? data.opacity : 1;
         if (data.variant === 'tape') {
@@ -257,11 +340,43 @@ const JournalCanvas = (() => {
       const el = createBoxEl(data);
       frameEl.appendChild(el);
       boxes.set(data.id, { el, data });
+      if (data.ruled) {
+        const c = el.querySelector('.canvas-box-content');
+        alignRuledBaseline(c, data);
+        // web fonts may arrive after first paint and change the baseline
+        if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => alignRuledBaseline(c, data));
+      }
       return { el, data };
     }
 
     function addText() {
       const data = { id: uid(), type: 'text', x: 20, y: 20, w: 160, h: 90, rot: 0, font: "'Patrick Hand', cursive", fontSize: 16, align: 'left', content: '' };
+      const { el } = addBox(data);
+      select(data.id);
+      emitChange();
+      const contentEl = el.querySelector('.canvas-box-content');
+      if (contentEl) setTimeout(() => contentEl.focus(), 0);
+      return data;
+    }
+
+    // A full-page, borderless text box sized to fill the whole ruled/dotted/
+    // grid area, with line-height matched to that pattern's own rule
+    // spacing — so tapping an empty page starts a document-style writing
+    // surface you can just type straight into (lines landing on the
+    // drawn rule), instead of needing "Add text" then manually resizing
+    // and positioning a box every time. Still a normal box afterwards
+    // (draggable/resizable/deletable) if you want to adjust it.
+    function addWritingArea() {
+      if (pattern !== 'lined') return null; // free writing is for lined paper only
+      const w = frameEl.offsetWidth || 340;
+      const h = frameEl.offsetHeight || 480;
+      const lh = RULE_LINE_HEIGHT[pattern] || 22;
+      const fontSize = Math.max(12, Math.round(lh * 0.62));
+      const data = {
+        id: uid(), type: 'text', x: 18, y: 0, w: Math.max(60, w - 36), h,
+        rot: 0, font: "'Patrick Hand', cursive", fontSize, lineHeight: lh,
+        align: 'left', content: '', ruled: true,
+      };
       const { el } = addBox(data);
       select(data.id);
       emitChange();
@@ -325,7 +440,7 @@ const JournalCanvas = (() => {
 
     function duplicateBox(id) {
       const b = boxes.get(id || selectedId);
-      if (!b) return;
+      if (!b || b.data.ruled) return;
       const copy = { ...b.data, id: uid(), x: b.data.x + 18, y: b.data.y + 18 };
       addBox(copy);
       select(copy.id);
@@ -339,6 +454,7 @@ const JournalCanvas = (() => {
         b.data.font = font;
         const c = b.el.querySelector('.canvas-box-content');
         if (c) c.style.fontFamily = font;
+        if (c && b.data.ruled) alignRuledBaseline(c, b.data);
         emitChange();
       }
     }
@@ -346,9 +462,12 @@ const JournalCanvas = (() => {
     function bumpFontSizeForSelected(delta) {
       const b = boxes.get(selectedId);
       if (b && (b.data.type === 'text' || b.data.type === 'shape')) {
-        b.data.fontSize = Math.max(8, Math.min(72, (b.data.fontSize || 16) + delta));
+        // On ruled paper the text must stay inside one 28px line.
+        const maxSize = b.data.ruled ? (b.data.lineHeight || 28) - 4 : 72;
+        b.data.fontSize = Math.max(8, Math.min(maxSize, (b.data.fontSize || 16) + delta));
         const c = b.el.querySelector('.canvas-box-content');
         if (c) c.style.fontSize = b.data.fontSize + 'px';
+        if (c && b.data.ruled) alignRuledBaseline(c, b.data);
         emitChange();
       }
     }
@@ -557,13 +676,30 @@ const JournalCanvas = (() => {
       frameEl.removeEventListener('pointerdown', frameEl._journalCanvasBgHandler);
     }
     const bgPointerDown = (e) => {
-      if (e.target === frameEl) deselectAll();
+      if (e.target !== frameEl) return;
+      // On a ruled/dotted/grid page, tapping empty space should let you
+      // start typing immediately — either resume the page's existing
+      // writing area, or create one, rather than requiring "Add text"
+      // first every time. Blank pages keep the old behavior (just
+      // deselect) since there's no rule to write "on".
+      const existingRuled = [...boxes.values()].find(b => b.data.ruled);
+      if (existingRuled) {
+        select(existingRuled.data.id);
+        const contentEl = existingRuled.el.querySelector('.canvas-box-content');
+        if (contentEl) setTimeout(() => focusAtEnd(contentEl), 0);
+        return;
+      }
+      if (pattern === 'lined') {
+        addWritingArea();
+        return;
+      }
+      deselectAll();
     };
     frameEl._journalCanvasBgHandler = bgPointerDown;
     frameEl.addEventListener('pointerdown', bgPointerDown);
 
     return {
-      addText, addImage, addShape, addDeco, addTape,
+      addText, addImage, addShape, addDeco, addTape, addWritingArea,
       duplicateSelected: () => duplicateBox(selectedId),
       removeSelected: () => selectedId && removeBox(selectedId),
       setFontForSelected, bumpFontSizeForSelected, setAlignForSelected,
