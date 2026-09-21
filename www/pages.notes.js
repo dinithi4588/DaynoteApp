@@ -80,9 +80,31 @@ Pages.notes = (() => {
   // a plain CSS class can't do that once an inline background-image (a
   // themed cover's art, or an uploaded photo) is set, since the inline
   // style always wins over the class for the same property.
+  // Lined paper: the rules are drawn INSIDE an inset area (keeping clear of the
+  // page's outer border / cover-art frame) instead of running edge to edge, and
+  // the area is a whole number of 28px lines tall so the last line isn't cut.
+  // The writing area in journal_canvas.js uses the same numbers -- keep the two
+  // LINED_INSET values in sync. `scale` shrinks everything for small previews
+  // (a thumbnail is a scaled-down 340px-wide page).
+  const LINED_INSET = { top: 40, right: 28, bottom: 40, left: 28 };
+  const LINED_LH = 28;
+  function linedLayer(scale) {
+    const s = scale > 0 ? scale : 1;
+    const W = 340, H = Math.round(340 * 297 / 210);
+    const areaW = W - LINED_INSET.left - LINED_INSET.right;
+    const areaH = Math.floor((H - LINED_INSET.top - LINED_INSET.bottom) / LINED_LH) * LINED_LH;
+    const period = LINED_LH * s;
+    const thick = Math.max(1, s);
+    return {
+      images: [`repeating-linear-gradient(to bottom, transparent 0 ${period - thick}px, var(--rule) ${period - thick}px ${period}px)`],
+      sizes: [`${areaW * s}px ${areaH * s}px`],
+      positions: [`${LINED_INSET.left * s}px ${LINED_INSET.top * s}px`],
+      repeats: ['no-repeat'],
+    };
+  }
   const PATTERN_LAYERS = {
     dotted: { images: ['radial-gradient(var(--rule) 1.1px, transparent 1.6px)'], sizes: ['18px 18px'] },
-    lined: { images: ['repeating-linear-gradient(to bottom, transparent 0 27px, var(--rule) 27px 28px)'], sizes: ['auto'] },
+    // 'lined' is built by linedLayer() below (it sits inside the page margins)
     grid: {
       images: [
         'repeating-linear-gradient(to right, var(--rule) 0 1px, transparent 1px 18px)',
@@ -99,12 +121,13 @@ Pages.notes = (() => {
   // live editor frame and every small page preview (rail chips, template
   // tiles, My Journals / Continue-writing cards) so they all render
   // exactly what's saved.
-  function combinedBackground(patternId, bg) {
-    const pat = PATTERN_LAYERS[patternId || 'dotted'] || PATTERN_LAYERS.blank;
+  function combinedBackground(patternId, bg, scale) {
+    const pat = (patternId === 'lined') ? linedLayer(scale)
+      : (PATTERN_LAYERS[patternId || 'dotted'] || PATTERN_LAYERS.blank);
     const images = [...pat.images];
     const sizes = [...pat.sizes];
-    const positions = pat.images.map(() => '0 0');
-    const repeats = pat.images.map(() => 'repeat');
+    const positions = pat.positions ? [...pat.positions] : pat.images.map(() => '0 0');
+    const repeats = pat.repeats ? [...pat.repeats] : pat.images.map(() => 'repeat');
     let color = '';
 
     if (bg && bg.type === 'image') {
@@ -241,6 +264,26 @@ Pages.notes = (() => {
   // line/grid pattern. For an image background, `color` (when present) is
   // applied underneath as a fallback so the preview still looks intentional
   // if the image can't load (offline, blocked, etc.).
+  // Sets a preview thumbnail's background (paper pattern + cover art / colour)
+  // straight on the element. The old way pasted the CSS into an HTML style="..."
+  // string, but a cover image is written as url("...") -- its double quotes ended
+  // the attribute early, so the browser threw the whole style away and every
+  // preview came out blank (only the editor, which sets styles from JS, worked).
+  function setThumbBg(el, bg, pattern) {
+    if (!el) return;
+    const apply = () => {
+      const scale = el.clientWidth ? el.clientWidth / 340 : 1;
+      const css = combinedBackground(pattern, bg, scale);
+      el.style.backgroundImage = css.backgroundImage;
+      el.style.backgroundSize = css.backgroundSize;
+      el.style.backgroundPosition = css.backgroundPosition;
+      el.style.backgroundRepeat = css.backgroundRepeat;
+      el.style.backgroundColor = css.backgroundColor;
+    };
+    apply();
+    if (!el.clientWidth) requestAnimationFrame(apply); // not laid out yet -> redo once it is
+  }
+
   function pageBgStyle(bg, pattern) {
     const css = combinedBackground(pattern, bg);
     return `background-image:${css.backgroundImage};background-size:${css.backgroundSize};background-position:${css.backgroundPosition};background-repeat:${css.backgroundRepeat};${css.backgroundColor ? `background-color:${css.backgroundColor};` : ''}`;
@@ -309,7 +352,7 @@ Pages.notes = (() => {
         ${mostRecent ? `
         <p class="journal-section-label">Continue writing</p>
         <div class="continue-card" id="continue-card">
-          <div class="continue-card-thumb pattern-${mostRecent.pages[0]?.pattern || 'dotted'}" style="${pageBgStyle(mostRecent.pages[0]?.background, mostRecent.pages[0]?.pattern)}"></div>
+          <div class="continue-card-thumb pattern-${mostRecent.pages[0]?.pattern || 'dotted'}"></div>
           <div class="continue-card-body">
             <div class="continue-card-title">${UI.escapeHtml(mostRecent.title || 'Untitled')}</div>
             <div class="continue-card-meta">Last edited ${formatWhen(mostRecent.updatedAt || mostRecent.createdAt)}</div>
@@ -333,7 +376,9 @@ Pages.notes = (() => {
       if (mostRecent) {
         $('#continue-card-btn').onclick = () => showEditor(mostRecent.id);
         $('#continue-card').onclick = () => showEditor(mostRecent.id);
-        renderMiniPage($('#continue-card').querySelector('.continue-card-thumb'), mostRecent.pages[0] || { elements: [] });
+        const contThumb = $('#continue-card').querySelector('.continue-card-thumb');
+        setThumbBg(contThumb, mostRecent.pages[0]?.background, mostRecent.pages[0]?.pattern);
+        renderMiniPage(contThumb, mostRecent.pages[0] || { elements: [] });
       }
 
       const shelf = $('#journal-shelf');
@@ -349,13 +394,14 @@ Pages.notes = (() => {
           card.className = 'note-card shelf-card';
           const d = new Date(n.updatedAt || n.createdAt);
           card.innerHTML = `
-            <div class="note-card-thumb pattern-${firstPage.pattern || 'dotted'}" style="${pageBgStyle(firstPage.background, firstPage.pattern)}"></div>
+            <div class="note-card-thumb pattern-${firstPage.pattern || 'dotted'}"></div>
             <div class="note-title">${UI.escapeHtml(n.title || 'Untitled')}</div>
             <div class="note-snippet">${UI.escapeHtml(preview)}</div>
             <div class="note-meta">${note.pages.length} page${note.pages.length === 1 ? '' : 's'} &middot; ${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</div>
           `;
           card.onclick = () => showEditor(n.id);
           shelf.appendChild(card);
+          setThumbBg(card.querySelector('.note-card-thumb'), firstPage.background, firstPage.pattern);
           renderMiniPage(card.querySelector('.note-card-thumb'), firstPage);
         });
       }
@@ -368,7 +414,8 @@ Pages.notes = (() => {
         const tile = document.createElement('button');
         tile.type = 'button';
         tile.className = 'tpl-tile shelf-tpl-tile';
-        tile.innerHTML = `<div class="tpl-tile-preview pattern-${t.pattern}" style="${pageBgStyle(t.background, t.pattern)}"></div><span class="tpl-tile-label">${t.label}</span>`;
+        tile.innerHTML = `<div class="tpl-tile-preview pattern-${t.pattern}"></div><span class="tpl-tile-label">${t.label}</span>`;
+        setThumbBg(tile.querySelector('.tpl-tile-preview'), t.background, t.pattern);
         tile.onclick = () => createFromTemplate(t.id);
         templatesShelf.appendChild(tile);
       });
@@ -422,7 +469,8 @@ Pages.notes = (() => {
         const tile = document.createElement('button');
         tile.type = 'button';
         tile.className = 'tpl-tile';
-        tile.innerHTML = `<div class="tpl-tile-preview pattern-${t.pattern}" style="${pageBgStyle(t.background, t.pattern)}"></div><span class="tpl-tile-label">${t.label}</span>`;
+        tile.innerHTML = `<div class="tpl-tile-preview pattern-${t.pattern}"></div><span class="tpl-tile-label">${t.label}</span>`;
+        setThumbBg(tile.querySelector('.tpl-tile-preview'), t.background, t.pattern);
         tile.onclick = () => createFromTemplate(t.id);
         themeRow.appendChild(tile);
       });
@@ -908,9 +956,8 @@ Pages.notes = (() => {
           const chip = document.createElement('button');
           chip.type = 'button';
           chip.className = 'page-chip' + (i === activeIndex ? ' active' : '');
-          const bgStyle = pageBgStyle(p.background, p.pattern);
           chip.innerHTML = `
-            <div class="page-chip-thumb pattern-${p.pattern || 'dotted'}" style="${bgStyle}"></div>
+            <div class="page-chip-thumb pattern-${p.pattern || 'dotted'}"></div>
             <span class="page-chip-num">${i + 1}</span>
             ${pages.length > 1 ? `<button type="button" class="page-chip-del" title="Delete this page" aria-label="Delete this page">&#128465;</button>` : ''}
           `;
@@ -928,6 +975,7 @@ Pages.notes = (() => {
             };
           }
           railList.appendChild(chip);
+          setThumbBg(chip.querySelector('.page-chip-thumb'), p.background, p.pattern);
           renderMiniPage(chip.querySelector('.page-chip-thumb'), p);
         });
       }
