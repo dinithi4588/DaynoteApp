@@ -210,7 +210,7 @@ const DB = (() => {
       },
       clear() {
         cache[storeName] = [];
-        idbClear(storeName);
+        return idbClear(storeName); // promise, so a caller can wait until the wipe has really finished
       },
     };
   }
@@ -225,6 +225,38 @@ const DB = (() => {
   function kvDelete(key) {
     delete cache.kv[key];
     idbDelete('kv', key);
+  }
+
+  // Firebase restores a saved sign-in asynchronously after page load, so
+  // auth().currentUser is often still null for the first moment. Reading it
+  // straight away made "Delete account" think nobody was signed in and skip
+  // deleting the Firebase user -- leaving the email fully able to sign in.
+  // This waits for Firebase's first answer (max ~4s) before deciding.
+  function firebaseUserReady(timeoutMs) {
+    if (typeof firebase === 'undefined' || !firebase.auth) return Promise.resolve(null);
+    const auth = firebase.auth();
+    if (auth.currentUser) return Promise.resolve(auth.currentUser);
+    return new Promise((resolve) => {
+      let done = false, unsub = null, timer = null;
+      const finish = (u) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        if (unsub) unsub();
+        resolve(u || auth.currentUser || null);
+      };
+      timer = setTimeout(() => finish(null), timeoutMs || 4000);
+      unsub = auth.onAuthStateChanged((u) => finish(u), () => finish(null));
+      if (done && unsub) unsub();
+    });
+  }
+
+  function friendlyAuthError(e) {
+    const code = (e && e.code) || '';
+    if (['auth/wrong-password', 'auth/invalid-credential', 'auth/invalid-login-credentials'].includes(code)) return 'Incorrect password.';
+    if (code === 'auth/too-many-requests') return 'Too many attempts. Wait a few minutes and try again.';
+    if (code === 'auth/network-request-failed') return 'No internet connection. Your account was NOT deleted.';
+    return (e && e.message) || 'Something went wrong. Your account was NOT deleted.';
   }
 
   function getStorageEstimate() {
@@ -316,29 +348,94 @@ const DB = (() => {
       kvSet('onboarded', false);
       return true;
     },
-    async deleteAccount() {
-      if (typeof firebase !== 'undefined' && firebase.auth && firebase.auth().currentUser) {
-        try { await firebase.auth().currentUser.delete(); }
-        catch (e) {
-          // Firebase requires a recent sign-in for this; if that's why it
-          // failed, at least sign the person out so the account isn't left
-          // in a half-deleted-looking state on this device.
-          if (e && e.code === 'auth/requires-recent-login') await firebase.auth().signOut().catch(() => {});
+    // Permanently deletes the account: FIRST the real Firebase user (so the
+    // email/password can never sign in again), and only when that has
+    // actually succeeded, the data on this device.
+    //
+    // Before, a Firebase failure (most often auth/requires-recent-login) was
+    // swallowed, and the local data was wiped anyway -- so it LOOKED deleted
+    // while the account still existed and could sign back in.
+    //
+    // Returns one of:
+    //   { ok: true }
+    //   { ok: false, needsReauth: true, email, providers }  -> ask the person to
+    //        confirm (password or Google) then call again with { password }
+    //        or { freshUser } (the Firebase user Google sign-in just returned)
+    //   { ok: false, error }  -> nothing was deleted
+    async deleteAccount(opts) {
+      const { password, freshUser } = opts || {};
+      const norm = (s) => (s || '').trim().toLowerCase();
+      const savedEmail = norm((kvGet('profile', {}) || {}).email);
+      const hasFirebase = typeof firebase !== 'undefined' && firebase.auth;
+
+      if (hasFirebase) {
+        const auth = firebase.auth();
+        let user = await firebaseUserReady();
+        const expectedEmail = norm(user && user.email) || savedEmail;
+
+        // The saved session is gone but this device still knows an email:
+        // that account still exists in Firebase, so it has to be signed
+        // into again to be deleted.
+        if (!user && expectedEmail) {
+          if (freshUser) user = freshUser;
+          else if (password) {
+            try { user = (await auth.signInWithEmailAndPassword(expectedEmail, password)).user; }
+            catch (e) { return { ok: false, error: friendlyAuthError(e) }; }
+          } else {
+            return { ok: false, needsReauth: true, email: expectedEmail, providers: [] };
+          }
         }
-        // Deleting the Firebase user does NOT end the native Google
-        // session on Android. Without this, the Capacitor Google Sign-In
-        // plugin still has an account cached, so the next "Continue with
-        // Google" tap silently re-authenticates with it instead of
-        // showing the account picker \u2014 same fix as signOut() below.
+
+        if (user) {
+          // Guard against deleting the WRONG account (e.g. a different
+          // Google account picked in the chooser).
+          if (freshUser && expectedEmail && norm(freshUser.email) !== expectedEmail) {
+            try { await auth.signOut(); } catch (e) { /* ignore */ }
+            return { ok: false, error: 'That is a different account (' + freshUser.email + '). Use ' + expectedEmail + '.' };
+          }
+          if (password && user.email && !freshUser) {
+            try {
+              await user.reauthenticateWithCredential(firebase.auth.EmailAuthProvider.credential(user.email, password));
+            } catch (e) { return { ok: false, error: friendlyAuthError(e) }; }
+          }
+          try {
+            await user.delete();
+          } catch (e) {
+            const code = (e && e.code) || '';
+            if (code === 'auth/requires-recent-login' || code === 'auth/user-token-expired') {
+              return {
+                ok: false, needsReauth: true, email: user.email || expectedEmail,
+                providers: (user.providerData || []).map((p) => p.providerId),
+              };
+            }
+            // already gone on the server -> that's the outcome we want
+            if (code !== 'auth/user-not-found') return { ok: false, error: friendlyAuthError(e) };
+          }
+        }
+
+        // The native Google session on Android outlives the Firebase user;
+        // clear it so the next "Continue with Google" shows the chooser.
         const nativeAuth = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.FirebaseAuthentication;
         if (nativeAuth && nativeAuth.signOut) {
           try { await nativeAuth.signOut(); } catch (e) { /* not signed in natively */ }
         }
+        try { await auth.signOut(); } catch (e) { /* already signed out */ }
       }
-      ['events', 'tasks', 'transactions', 'notes', 'financeTxns'].forEach((s) => collection(s).clear());
+
+      // Only reached once the Firebase account is really gone (or this
+      // device never had one). Now wipe the on-device data, and wait for it.
+      await Promise.all(
+        ['events', 'tasks', 'transactions', 'notes', 'financeTxns']
+          .map((s) => Promise.resolve().then(() => collection(s).clear()).catch(() => {}))
+      );
       await idbClear('kv');
       cache.kv = {};
-      return true;
+      // Leave nothing behind, so the next launch is exactly like a new user.
+      try {
+        Object.keys(localStorage).filter((k) => k.indexOf('daynote') === 0).forEach((k) => localStorage.removeItem(k));
+        Object.keys(sessionStorage).filter((k) => k.indexOf('daynote') === 0).forEach((k) => sessionStorage.removeItem(k));
+      } catch (e) { /* storage unavailable */ }
+      return { ok: true };
     },
 
     // ---- Backup / restore ----
