@@ -111,6 +111,27 @@ jobs:
       # broke Firebase's resource generation, crashing the app at launch.
       - name: Add Firebase config to the native project
         run: cp google-services.json android/app/google-services.json
+      # Gives every build a number (the workflow run number: 1, 2, 3, ...).
+      #  - www/build-info.json ({"build": N}) is copied into the APK by
+      #    `cap sync` below, so the installed app knows its own build number.
+      #  - versionCode / versionName in the generated build.gradle are set to
+      #    the same number. Android only lets a new APK install OVER an old
+      #    one (keeping the data) if its versionCode is not lower, so this
+      #    keeps every new build installable as a plain update.
+      #  - The Release is named "Build N" (see the last step); the app reads
+      #    that name to tell whether a newer build exists.
+      # NOTE: do not rename or delete this workflow file. GitHub restarts the
+      # run number from 1 for a new workflow file, and Android would then
+      # refuse those builds as downgrades.
+      - name: Stamp build number into the app
+        run: |
+          BUILD=${{ github.run_number }}
+          echo "{\"build\": $BUILD}" > www/build-info.json
+          sed -i -E "s/versionCode [0-9]+/versionCode ${BUILD}/" android/app/build.gradle
+          sed -i -E "s/versionName \"[^\"]*\"/versionName \"1.0.${BUILD}\"/" android/app/build.gradle
+          cat www/build-info.json
+          grep -n -E "versionCode|versionName" android/app/build.gradle
+          grep -q "versionCode ${BUILD}" android/app/build.gradle
       - name: Sync web assets into the native project
         run: npx cap sync android
       # Declares BOTH exact-alarm permissions, because each one covers a
@@ -171,7 +192,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
-          name: Latest build
+          name: Build ${{ github.run_number }}
           body: Automatically published from commit ${{ github.sha }}.
           files: android/app/build/outputs/apk/debug/app-debug.apk
         env:
