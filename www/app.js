@@ -53,6 +53,7 @@ const UI = (() => {
     if (typeof Reminders !== 'undefined') Reminders.start();
     registerServiceWorker();
     wireInstallPrompt();
+    checkForAppUpdate();
   }
 
   // ---------------- PWA: service worker + install prompt ----------------
@@ -147,6 +148,66 @@ const UI = (() => {
         showToast('Downloading DayNote', 'Open the downloaded APK to install. You may need to allow installs from this source.');
       };
     }
+  }
+
+  // ---------------- In-app update check (installed Android app only) ----------------
+  // The GitHub Actions build writes www/build-info.json ({"build": N}) into
+  // the APK and names the "latest" GitHub Release "Build N". Each time the
+  // installed app opens, it asks GitHub which build is newest; if that is
+  // newer than this one, a banner offers the download. Opening the new APK
+  // over the old app is an UPDATE (same signing key, higher versionCode), so
+  // nothing is uninstalled and the data on the phone is kept. Sideloaded apps
+  // cannot update silently, so the person still taps the downloaded file once.
+  async function checkForAppUpdate() {
+    const isNativeApp = typeof window.Capacitor !== 'undefined' && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform();
+    if (!isNativeApp) return; // the website updates itself on every deploy
+    try {
+      const infoRes = await fetch('build-info.json', { cache: 'no-store' });
+      if (!infoRes.ok) return;
+      const mine = Number((await infoRes.json()).build);
+      if (!mine) return;
+
+      const m = APK_URL.match(/github\.com\/([^/]+)\/([^/]+)\/releases\//);
+      if (!m) return;
+      const relRes = await fetch('https://api.github.com/repos/' + m[1] + '/' + m[2] + '/releases/tags/latest', {
+        headers: { Accept: 'application/vnd.github+json' },
+      });
+      if (!relRes.ok) return;
+      const rel = await relRes.json();
+      const latest = Number(((rel.name || '').match(/(\d+)/) || [])[1]);
+      if (!latest || latest <= mine) return;
+
+      // If the person dismissed this exact update, don't nag again for it.
+      let dismissed = 0;
+      try { dismissed = Number(localStorage.getItem('daynote_update_dismissed') || 0); } catch (e) {}
+      if (dismissed >= latest) return;
+
+      showUpdateBanner(latest);
+    } catch (e) { /* offline or rate-limited: just try again next launch */ }
+  }
+
+  function showUpdateBanner(latest) {
+    if ($('#update-banner')) return;
+    const banner = document.createElement('div');
+    banner.id = 'update-banner';
+    banner.className = 'install-banner';
+    banner.innerHTML = `<span class="install-banner-icon">&#8635;</span>
+      <span class="install-banner-text">A new version of DayNote is available. Download it, open the file, and tap <b>Update</b>. Your data is kept.</span>
+      <button type="button" class="install-banner-install">Update</button>
+      <button type="button" class="install-banner-close" aria-label="Dismiss">&#10005;</button>`;
+    document.body.appendChild(banner);
+
+    banner.querySelector('.install-banner-close').onclick = () => {
+      try { localStorage.setItem('daynote_update_dismissed', String(latest)); } catch (e) {}
+      banner.remove();
+    };
+    banner.querySelector('.install-banner-install').onclick = () => {
+      // Capacitor hands external links to the system browser, which
+      // downloads the APK; the person then opens it to install the update.
+      window.open(APK_URL, '_blank');
+      banner.remove();
+      showToast('Downloading update', 'When it finishes, open the APK and tap Update. Your data is kept.');
+    };
   }
 
   // ---------------- Modal dismissal (click outside / Escape) ----------------
