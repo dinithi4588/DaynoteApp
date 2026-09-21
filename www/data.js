@@ -325,6 +325,15 @@ const DB = (() => {
           // in a half-deleted-looking state on this device.
           if (e && e.code === 'auth/requires-recent-login') await firebase.auth().signOut().catch(() => {});
         }
+        // Deleting the Firebase user does NOT end the native Google
+        // session on Android. Without this, the Capacitor Google Sign-In
+        // plugin still has an account cached, so the next "Continue with
+        // Google" tap silently re-authenticates with it instead of
+        // showing the account picker \u2014 same fix as signOut() below.
+        const nativeAuth = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.FirebaseAuthentication;
+        if (nativeAuth && nativeAuth.signOut) {
+          try { await nativeAuth.signOut(); } catch (e) { /* not signed in natively */ }
+        }
       }
       ['events', 'tasks', 'transactions', 'notes', 'financeTxns'].forEach((s) => collection(s).clear());
       await idbClear('kv');
