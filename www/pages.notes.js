@@ -96,19 +96,19 @@ Pages.notes = (() => {
     const period = LINED_LH * s;
     const thick = Math.max(1, s);
     return {
-      images: [`repeating-linear-gradient(to bottom, transparent 0 ${period - thick}px, var(--rule) ${period - thick}px ${period}px)`],
+      images: [`repeating-linear-gradient(to bottom, transparent 0 ${period - thick}px, var(--paper-rule) ${period - thick}px ${period}px)`],
       sizes: [`${areaW * s}px ${areaH * s}px`],
       positions: [`${LINED_INSET.left * s}px ${LINED_INSET.top * s}px`],
       repeats: ['no-repeat'],
     };
   }
   const PATTERN_LAYERS = {
-    dotted: { images: ['radial-gradient(var(--rule) 1.1px, transparent 1.6px)'], sizes: ['18px 18px'] },
+    dotted: { images: ['radial-gradient(var(--paper-rule) 1.1px, transparent 1.6px)'], sizes: ['18px 18px'] },
     // 'lined' is built by linedLayer() below (it sits inside the page margins)
     grid: {
       images: [
-        'repeating-linear-gradient(to right, var(--rule) 0 1px, transparent 1px 18px)',
-        'repeating-linear-gradient(to bottom, var(--rule) 0 1px, transparent 1px 18px)',
+        'repeating-linear-gradient(to right, var(--paper-rule) 0 1px, transparent 1px 18px)',
+        'repeating-linear-gradient(to bottom, var(--paper-rule) 0 1px, transparent 1px 18px)',
       ],
       sizes: ['auto', 'auto'],
     },
@@ -651,7 +651,7 @@ Pages.notes = (() => {
             </button>
             <div class="popover footer-popover" id="bg-popover">
               <div class="popover-label">Page background</div>
-              <div style="display:flex;align-items:center;gap:10px;padding:6px 12px;">
+              <div class="richtext-controls" style="align-items:center;gap:10px;padding:6px 12px;">
                 <input type="color" id="bg-color-input" value="#f6efe2" title="Background color" />
                 <span style="font-size:.78rem;color:var(--ink-soft);">Color</span>
               </div>
@@ -661,6 +661,22 @@ Pages.notes = (() => {
               ${PATTERNS.map(p => `<button type="button" class="popover-item" data-bg-pattern="${p.id}"><span>&#128196;</span><span>${p.label}</span></button>`).join('')}
               <div class="popover-divider"></div>
               <button type="button" class="popover-item danger" id="bg-clear-item"><span>&#10005;</span><span>Clear background</span></button>
+            </div>
+          </div>
+          <div class="editor-more-wrap" id="shape-bg-wrap" style="display:none;">
+            <button type="button" class="tool-chip" id="shape-bg-btn" title="Shape background">
+              <span class="tool-chip-icon">&#127912;</span><span class="tool-chip-label">Background</span>
+            </button>
+            <div class="popover footer-popover" id="shape-bg-popover">
+              <div class="popover-label">Shape background</div>
+              <div class="richtext-controls" style="align-items:center;gap:10px;padding:6px 12px;">
+                <input type="color" id="shape-fill" value="#f5eee8" title="Shape fill color" />
+                <span style="font-size:.78rem;color:var(--ink-soft);">Fill color</span>
+              </div>
+              <div class="richtext-controls" style="align-items:center;gap:10px;padding:6px 12px;">
+                <input type="color" id="shape-border" value="#8d7565" title="Shape border color" />
+                <span style="font-size:.78rem;color:var(--ink-soft);">Border color</span>
+              </div>
             </div>
           </div>
           <button type="button" class="tool-chip" id="draw-toggle-btn" title="Draw">
@@ -688,18 +704,7 @@ Pages.notes = (() => {
             </div>
             <span class="tool-chip-label">Highlight</span>
           </div>
-          <div class="tool-chip tool-chip-static" id="shape-fill-chip" style="display:none;">
-            <div class="richtext-controls">
-              <input type="color" id="shape-fill" value="#f5eee8" title="Shape fill color" />
-            </div>
-            <span class="tool-chip-label">Fill</span>
-          </div>
-          <div class="tool-chip tool-chip-static" id="shape-border-chip" style="display:none;">
-            <div class="richtext-controls">
-              <input type="color" id="shape-border" value="#8d7565" title="Shape border color" />
-            </div>
-            <span class="tool-chip-label">Outline</span>
-          </div>
+
           <div class="tool-chip tool-chip-static">
             <div class="richtext-controls">
               <button type="button" class="zoom-btn" id="rt-bold" title="Bold (selection)"><b>B</b></button>
@@ -776,16 +781,19 @@ Pages.notes = (() => {
       const decoPop = $('#deco-popover');
       const bgBtn = $('#bg-btn');
       const bgPop = $('#bg-popover');
+      const shapeBgBtn = $('#shape-bg-btn');
+      const shapeBgPop = $('#shape-bg-popover');
       const railAddBtn = $('#page-rail-add');
       const pageTypePop = $('#page-type-popover');
       function closeAllPopovers(except) {
-        [morePop, shapePop, decoPop, bgPop, pageTypePop].forEach(p => { if (p !== except) p.classList.remove('open'); });
+        [morePop, shapePop, decoPop, bgPop, shapeBgPop, pageTypePop].forEach(p => { if (p !== except) p.classList.remove('open'); });
       }
       function onPopoverOutsideClick(e) {
         if (!morePop.contains(e.target) && e.target !== moreBtn) morePop.classList.remove('open');
         if (!shapePop.contains(e.target) && e.target !== shapeBtn) shapePop.classList.remove('open');
         if (!decoPop.contains(e.target) && e.target !== decoBtn) decoPop.classList.remove('open');
         if (!bgPop.contains(e.target) && e.target !== bgBtn) bgPop.classList.remove('open');
+        if (!shapeBgPop.contains(e.target) && e.target !== shapeBgBtn) shapeBgPop.classList.remove('open');
         if (!pageTypePop.contains(e.target) && e.target !== railAddBtn) pageTypePop.classList.remove('open');
       }
       // Places a footer popover just under (or, if there's no room, just
@@ -809,6 +817,7 @@ Pages.notes = (() => {
       shapeBtn.onclick = (e) => { e.stopPropagation(); toggleFooterPopover(shapeBtn, shapePop); };
       decoBtn.onclick = (e) => { e.stopPropagation(); toggleFooterPopover(decoBtn, decoPop); };
       bgBtn.onclick = (e) => { e.stopPropagation(); toggleFooterPopover(bgBtn, bgPop); };
+      shapeBgBtn.onclick = (e) => { e.stopPropagation(); toggleFooterPopover(shapeBgBtn, shapeBgPop); };
       railAddBtn.onclick = (e) => { e.stopPropagation(); toggleFooterPopover(railAddBtn, pageTypePop); };
       pageTypePop.querySelectorAll('.popover-item').forEach(btn => {
         btn.onclick = () => { pageTypePop.classList.remove('open'); addPage(btn.dataset.pattern); };
@@ -990,9 +999,10 @@ Pages.notes = (() => {
             // visual scale (responsive fit + pinch zoom), not just zoom.
             getZoom: () => fitScale * zoom,
             onSelectionChange: (type) => {
-              const show = type === 'shape' ? 'flex' : 'none';
-              if (shapeFillChip) shapeFillChip.style.display = show;
-              if (shapeBorderChip) shapeBorderChip.style.display = show;
+              // The shape-background popover reuses the same palette icon as
+              // the page-background one, so it lives in the toolbar the same
+              // way: hidden until a shape (including a Note box) is selected.
+              if (shapeBgWrap) shapeBgWrap.style.display = type === 'shape' ? '' : 'none';
             },
           }
         );
@@ -1092,6 +1102,7 @@ Pages.notes = (() => {
         document.removeEventListener('pointercancel', onPanEnd);
       });
 
+      const shapeBgWrap = $('#shape-bg-wrap');
       renderActivePage();
 
       // ---- tools (act on the currently displayed page) ----
@@ -1233,8 +1244,6 @@ Pages.notes = (() => {
       if (rememberedPen) rtColor.value = rememberedPen;
       rtColor.oninput = () => { if (activeCanvas) activeCanvas.textColorSelected(rtColor.value); else JournalCanvas.setPenColor(rtColor.value); };
       rtHighlight.oninput = () => activeCanvas?.highlightSelected(rtHighlight.value);
-      const shapeFillChip = $('#shape-fill-chip');
-      const shapeBorderChip = $('#shape-border-chip');
       const shapeFillInput = $('#shape-fill');
       const shapeBorderInput = $('#shape-border');
       shapeFillInput.oninput = () => activeCanvas?.setFillForSelected(shapeFillInput.value);
