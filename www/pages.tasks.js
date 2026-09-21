@@ -218,7 +218,7 @@ Pages.tasks = (() => {
       const today = Modals.todayStr();
       let tasks = DB.events.list().filter(e => e.type === 'task');
 
-      if (filter === 'upcoming') tasks = tasks.filter(t => (t.repeat === 'daily' || t.repeat === 'weekly') ? (isActiveOn(t, selectedDate) && !isDoneForView(t, selectedDate)) : (!t.done && t.date >= today));
+      if (filter === 'upcoming') tasks = tasks.filter(t => (t.repeat === 'daily' || t.repeat === 'weekly') ? (isActiveOn(t, selectedDate) && !isDoneForView(t, selectedDate)) : !t.done);
       else if (filter === 'done') tasks = tasks.filter(t => isDoneForView(t, selectedDate));
       // 'all' = no filter
 
@@ -239,6 +239,8 @@ Pages.tasks = (() => {
         const isDaily = t.repeat === 'daily' || t.repeat === 'weekly';
         const done = isDoneForView(t, selectedDate);
         const subParts = [];
+        // One-off task that is not done and whose date has passed.
+        if (!isDaily && !done && t.date && t.date < today) subParts.push(`Overdue \u00B7 ${formatSelectedDate(t.date)}`);
         if (isDaily) {
           const freqLabel = t.repeat === 'weekly' ? 'Weekly' : 'Daily';
           subParts.push(`\u21BB ${freqLabel} \u00B7 ${t.dailyWeeks || 1} wk${(t.dailyWeeks || 1) > 1 ? 's' : ''}`);
