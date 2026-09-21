@@ -9,6 +9,10 @@
     "FirebaseAuthentication": {
       "skipNativeAuth": false,
       "providers": ["google.com"]
+    },
+    "LocalNotifications": {
+      "smallIcon": "ic_stat_daynote",
+      "iconColor": "#732E2C"
     }
   }
 }
