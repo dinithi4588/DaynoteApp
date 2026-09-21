@@ -47,6 +47,19 @@ jobs:
           if [ ! -d "android" ]; then
             npx cap add android
           fi
+      # The Firebase Authentication plugin only bundles Google Sign-In's
+      # library (play-services-auth) when this flag is true; otherwise it is
+      # compile-only. capacitor.config.json lists "google.com" as a provider,
+      # so the plugin builds a Google sign-in client the moment the app
+      # starts -- if the library is missing, the app crashes at launch
+      # (NoClassDefFoundError). `cap add android` regenerates
+      # variables.gradle each build, so the flag is added here every time.
+      - name: Bundle Google Sign-In into the Firebase Auth plugin
+        run: |
+          VARS="android/variables.gradle"
+          if ! grep -q "rgcfaIncludeGoogle" "$VARS"; then
+            sed -i 's/^ext {/ext {\n    rgcfaIncludeGoogle = true/' "$VARS"
+          fi
       # Replaces Capacitor's default template icon (a generic blue
       # geometric mark, applied fresh by `cap add android` above on every
       # build) with DayNote's actual "D" icon, generated from the single
