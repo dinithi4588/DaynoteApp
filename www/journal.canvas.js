@@ -16,6 +16,40 @@
 const JournalCanvas = (() => {
   function uid() { return 'b' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
 
+  // ---- Pen colour for typing ----------------------------------------
+  // The colour chosen with the toolbar's "Text color" button is remembered
+  // here (and on the device) until the person picks another one, so text
+  // typed on a lined page keeps coming out in it -- across new lines, taps
+  // elsewhere on the page, switching pages, and closing the app. Without
+  // this the browser only remembered the colour for the current caret
+  // position, and ignored it completely if it was chosen before the page
+  // had been tapped. Existing text is never recoloured by this; selecting
+  // text and picking a colour still recolours just that selection.
+  const PEN_KEY = 'daynote_pen_color';
+  const HEX6 = /^#[0-9a-f]{6}$/i;
+  let penColor = null;
+  try { const saved = localStorage.getItem(PEN_KEY); if (HEX6.test(saved || '')) penColor = saved.toLowerCase(); } catch (e) { /* storage unavailable */ }
+  function setPenColor(color) {
+    if (!HEX6.test(color || '')) return;
+    penColor = color.toLowerCase();
+    try { localStorage.setItem(PEN_KEY, penColor); } catch (e) { /* storage unavailable */ }
+  }
+  function getPenColor() { return penColor; }
+  let applyingPen = false;
+  // Makes text typed at a blinking caret inside `contentEl` come out in the
+  // pen colour. Does nothing while text is selected (that is the
+  // recolour-the-selection case) or when the caret is already in that colour.
+  function applyPenAtCaret(contentEl) {
+    if (!penColor || applyingPen || !contentEl) return;
+    if (document.activeElement !== contentEl) return;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || !sel.isCollapsed || !contentEl.contains(sel.anchorNode)) return;
+    const r = parseInt(penColor.slice(1, 3), 16), g = parseInt(penColor.slice(3, 5), 16), b = parseInt(penColor.slice(5, 7), 16);
+    if (document.queryCommandValue('foreColor') === `rgb(${r}, ${g}, ${b})`) return;
+    applyingPen = true;
+    try { document.execCommand('foreColor', false, penColor); } finally { applyingPen = false; }
+  }
+
   const SHAPE_PRESETS = {
     rect: { label: 'Box', fill: '#f5eee8', border: '#8d7565', radius: '8px' },
     round: { label: 'Round', fill: '#efe6de', border: '#8d7565', radius: '22px' },
@@ -61,6 +95,7 @@ const JournalCanvas = (() => {
     const { onElementsChange, onDrawingChange, getZoom, onSelectionChange } = callbacks || {};
     let selectedId = null;
     let activeEditableEl = null; // the contentEditable currently focused, for rich-text commands
+    let composing = false;      // true while an IME/keyboard suggestion is being composed (don't touch styles then)
     let savedRange = null;       // last known selection Range inside activeEditableEl, so a toolbar
                                   // click (e.g. a native color picker) doesn't lose the highlighted text
     const boxes = new Map(); // id -> { el, data }
@@ -254,7 +289,10 @@ const JournalCanvas = (() => {
           data.content = content.innerHTML;
           emitChange();
         });
-        content.addEventListener('focus', () => { select(data.id); activeEditableEl = content; savedRange = null; });
+        content.addEventListener('focus', () => {
+          select(data.id); activeEditableEl = content; savedRange = null;
+          if (data.ruled) setTimeout(() => applyPenAtCaret(content), 0); // after the caret is placed
+        });
         content.addEventListener('mouseup', () => captureSelectionIfInside(content));
         content.addEventListener('keyup', () => captureSelectionIfInside(content));
         content.addEventListener('touchend', () => captureSelectionIfInside(content));
@@ -265,6 +303,21 @@ const JournalCanvas = (() => {
           // fonts/spacing can't push text off the lines.
           el.classList.add('ruled-box');
           content.classList.add('ruled');
+          // Re-assert the pen colour right before anything is typed. The
+          // browser drops its "next characters are colour X" note whenever
+          // the caret moves (even a key press that doesn't visibly move it,
+          // like End on a line's last character), so this is what makes the
+          // colour reliable; the selectionchange listener below also
+          // applies it as soon as the caret lands somewhere.
+          content.addEventListener('beforeinput', (e) => {
+            if (composing) return;
+            if (e.inputType && e.inputType.startsWith('insert')) applyPenAtCaret(content);
+          });
+          // Phone keyboards type each word as a "composition": apply the
+          // colour when the word starts, and leave the styling alone until
+          // it is finished.
+          content.addEventListener('compositionstart', () => { applyPenAtCaret(content); composing = true; });
+          content.addEventListener('compositionend', () => { composing = false; });
           content.addEventListener('paste', (e) => {
             e.preventDefault();
             const text = (e.clipboardData || window.clipboardData).getData('text/plain');
@@ -529,7 +582,10 @@ const JournalCanvas = (() => {
     function boldSelected() { withSelection('bold'); }
     function italicSelected() { withSelection('italic'); }
     function underlineSelected() { withSelection('underline'); }
-    function textColorSelected(color) { withSelection('foreColor', color); }
+    function textColorSelected(color) {
+      setPenColor(color); // remembered even if no writing area is focused yet
+      withSelection('foreColor', color); // recolours the selection (or the caret's next characters)
+    }
     function highlightSelected(color) { withSelection('hiliteColor', color); }
     function hasActiveSelection() { return !!activeEditableEl; }
     function setFillForSelected(color) {
@@ -719,6 +775,15 @@ const JournalCanvas = (() => {
     frameEl._journalCanvasBgHandler = bgPointerDown;
     frameEl.addEventListener('pointerdown', bgPointerDown);
 
+    // Same remount story as above: one selectionchange listener per frame.
+    if (frameEl._journalPenHandler) document.removeEventListener('selectionchange', frameEl._journalPenHandler);
+    const penOnCaretMove = () => {
+      if (composing || !activeEditableEl || !activeEditableEl.classList.contains('ruled')) return;
+      applyPenAtCaret(activeEditableEl);
+    };
+    frameEl._journalPenHandler = penOnCaretMove;
+    document.addEventListener('selectionchange', penOnCaretMove);
+
     return {
       addText, addImage, addShape, addDeco, addTape, addWritingArea,
       duplicateSelected: () => duplicateBox(selectedId),
@@ -732,5 +797,5 @@ const JournalCanvas = (() => {
     };
   }
 
-  return { mount };
+  return { mount, setPenColor, getPenColor };
 })();
