@@ -8,7 +8,7 @@
 :root, [data-theme="light"] {
   --paper: #FFFFFF; --paper-card: #FFFFFF; --paper-alt: #F2F2F2;
   --ink: #111111; --ink-soft: #5C5C5C; --ink-faint: #9A9A9A;
-  --rule: #E3E3E3; --rule-strong: #CCCCCC;
+  --rule: #E3E3E3; --rule-strong: #CCCCCC; --paper-rule: #F1F1F1;
   --calendar: #1A1A1A; --calendar-soft: #E8E8E8;
   --tasks: #1A1A1A; --tasks-soft: #E8E8E8;
   --finance: #1A1A1A; --finance-soft: #E8E8E8;
@@ -19,7 +19,7 @@
 [data-theme="dark"] {
   --paper: #000000; --paper-card: #121212; --paper-alt: #000000;
   --ink: #F2F2F2; --ink-soft: #A3A3A3; --ink-faint: #6E6E6E;
-  --rule: #262626; --rule-strong: #333333;
+  --rule: #262626; --rule-strong: #333333; --paper-rule: #131313;
   --calendar: #FFFFFF; --calendar-soft: #262626;
   --tasks: #FFFFFF; --tasks-soft: #262626;
   --finance: #FFFFFF; --finance-soft: #262626;
@@ -30,7 +30,7 @@
 [data-theme="maroon"] {
   --paper: #F7ECEA; --paper-card: #FFF9F8; --paper-alt: #EFD9D6;
   --ink: #2E1918; --ink-soft: #6E4B48; --ink-faint: #A67D79;
-  --rule: #E3C6C2; --rule-strong: #CBA29C;
+  --rule: #E3C6C2; --rule-strong: #CBA29C; --paper-rule: #EDD9D6;
   --calendar: #7A2E2E; --calendar-soft: #F0D6D3;
   --tasks: #7A2E2E; --tasks-soft: #F0D6D3;
   --finance: #7A2E2E; --finance-soft: #F0D6D3;
@@ -41,7 +41,7 @@
 [data-theme="coffee"] {
   --paper: #EFE4D8; --paper-card: #FAF3E9; --paper-alt: #E2D2BF;
   --ink: #2C1D12; --ink-soft: #6B4E39; --ink-faint: #A3826A;
-  --rule: #D8C1A3; --rule-strong: #BFA07A;
+  --rule: #D8C1A3; --rule-strong: #BFA07A; --paper-rule: #E3D2BD;
   --calendar: #5C3A22; --calendar-soft: #E8D4BC;
   --tasks: #5C3A22; --tasks-soft: #E8D4BC;
   --finance: #5C3A22; --finance-soft: #E8D4BC;
@@ -52,7 +52,7 @@
 [data-theme="sage"] {
   --paper: #F1F2EC; --paper-card: #FAFBF6; --paper-alt: #E5E8DB;
   --ink: #2A2E27; --ink-soft: #656C5D; --ink-faint: #9DA391;
-  --rule: #D8DCC9; --rule-strong: #C1C7AC;
+  --rule: #D8DCC9; --rule-strong: #C1C7AC; --paper-rule: #E4E7DA;
   --calendar: #7C7248; --calendar-soft: #E9E3C6;
   --tasks: #7C7248; --tasks-soft: #E9E3C6;
   --finance: #7C7248; --finance-soft: #E9E3C6;
@@ -853,10 +853,10 @@ a { color: inherit; }
   position: absolute; inset: 0; transform-origin: top left; overflow: hidden;
   background-color: var(--paper);
 }
-.page-frame.pattern-dotted, .pattern-dotted { background-image: radial-gradient(var(--rule) 1.1px, transparent 1.6px); background-size: 18px 18px; }
+.page-frame.pattern-dotted, .pattern-dotted { background-image: radial-gradient(var(--paper-rule) 1.1px, transparent 1.6px); background-size: 18px 18px; }
 .page-frame.pattern-blank, .pattern-blank { background-image: none; }
-.page-frame.pattern-lined, .pattern-lined { background-image: repeating-linear-gradient(to bottom, transparent 0 27px, var(--rule) 27px 28px); }
-.page-frame.pattern-grid, .pattern-grid { background-image: repeating-linear-gradient(to right, var(--rule) 0 1px, transparent 1px 18px), repeating-linear-gradient(to bottom, var(--rule) 0 1px, transparent 1px 18px); }
+.page-frame.pattern-lined, .pattern-lined { background-image: repeating-linear-gradient(to bottom, transparent 0 27px, var(--paper-rule) 27px 28px); }
+.page-frame.pattern-grid, .pattern-grid { background-image: repeating-linear-gradient(to right, var(--paper-rule) 0 1px, transparent 1px 18px), repeating-linear-gradient(to bottom, var(--paper-rule) 0 1px, transparent 1px 18px); }
 .page-frame.drawing .canvas-box { pointer-events: none; }
 .draw-canvas { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 5; touch-action: none; }
 
