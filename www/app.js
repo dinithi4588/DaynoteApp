@@ -697,17 +697,41 @@ const UI = (() => {
       const file = importInput.files[0];
       importInput.value = '';
       if (!file) return;
-      if (!confirm('Import this backup? It will overwrite your current DayNote data on this device.')) return;
       const reader = new FileReader();
+      reader.onerror = () => showToast('Import failed', 'That file couldn\u2019t be read.');
       reader.onload = () => {
+        // 1) Check the file BEFORE asking anything or touching any data.
+        let payload, summary;
         try {
-          const payload = JSON.parse(reader.result);
-          DB.importAll(payload);
-          showToast('Backup restored', 'Reloading\u2026');
-          setTimeout(() => location.reload(), 600);
+          payload = JSON.parse(reader.result);
         } catch (e) {
-          showToast('Import failed', e.message || 'That file couldn\u2019t be read as a DayNote backup.');
+          showToast('Import failed', 'That file isn\u2019t a DayNote backup (it isn\u2019t valid JSON).');
+          return;
         }
+        try {
+          summary = DB.describeBackup(payload);
+        } catch (e) {
+          showToast('Import failed', e.message || 'That file doesn\u2019t look like a DayNote backup.');
+          return;
+        }
+        // 2) Only then ask -- saying what was found -- and wait for the
+        //    restore to really finish before reporting success. (Uses the
+        //    in-app confirm box; window.confirm() is unreliable in webviews.)
+        showConfirm({
+          title: 'Import this backup?',
+          body: `Found ${summary}. Importing replaces the DayNote data on this device with it.`,
+          confirmLabel: 'Import',
+          danger: true,
+          onConfirm: async () => {
+            try {
+              await DB.importAll(payload);
+              showToast('Backup restored', 'Reloading\u2026');
+              setTimeout(() => location.reload(), 600);
+            } catch (e) {
+              showToast('Import failed', e.message || 'The backup couldn\u2019t be restored.');
+            }
+          },
+        });
       };
       reader.readAsText(file);
     };
