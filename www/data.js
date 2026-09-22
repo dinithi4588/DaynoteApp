@@ -578,56 +578,62 @@ const DB = (() => {
     },
     clearLockPin() { kvDelete('lockPin'); },
 
-    // ---- Biometric unlock (WebAuthn, on top of the PIN above) ----
-    // This uses the phone/laptop's own fingerprint or face unlock via the
-    // browser's WebAuthn API. There's no server to verify a signature
-    // against (this app has none), so the security model here is simply
-    // "did the OS's platform authenticator confirm it's you" — that's
-    // appropriate for an on-device app lock, the same trust level as the
-    // PIN above, not for anything that needs to prove identity to a server.
-    hasBiometric() { return !!kvGet('biometricCredId', null); },
+    // ---- Biometric unlock (native, on top of the PIN above) ----
+    // Uses @capgo/capacitor-native-biometric, which calls Android's
+    // BiometricPrompt through a real native bridge (window.Capacitor.
+    // Plugins.NativeBiometric — same pattern as LocalNotifications and
+    // FirebaseAuthentication elsewhere in this file).
+    //
+    // This replaces an earlier version that used the browser's raw
+    // WebAuthn API (navigator.credentials.create/get). That API assumes
+    // a real browser tab; a plain Android WebView (which is what this
+    // Capacitor app runs in) has no built-in bridge from WebAuthn to the
+    // platform authenticator, so those calls just silently did nothing —
+    // isBiometricAvailable() could still return true (the sensor exists),
+    // but registerBiometric()/verifyBiometric() would hang or fail with
+    // no visible error. Calling Android's native biometric API directly,
+    // as this does, actually works inside a WebView.
+    //
+    // There's still no server here (this app has none), so the security
+    // model is unchanged: "did the OS confirm it's you" — same trust
+    // level as the PIN above, used only as an on-device app lock.
+    hasBiometric() { return !!kvGet('biometricEnabled', false); },
     async isBiometricAvailable() {
-      if (!window.PublicKeyCredential || !PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable) return false;
-      try { return await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable(); }
-      catch (e) { return false; }
+      const plugin = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.NativeBiometric;
+      if (!plugin) return false; // web / plugin not present — nothing to offer
+      try {
+        const result = await plugin.isAvailable();
+        return !!(result && result.isAvailable);
+      } catch (e) { return false; }
     },
     async registerBiometric() {
-      const challenge = crypto.getRandomValues(new Uint8Array(32));
-      const userId = crypto.getRandomValues(new Uint8Array(16));
-      const cred = await navigator.credentials.create({
-        publicKey: {
-          challenge,
-          rp: { name: 'DayNote' },
-          user: { id: userId, name: 'daynote-local-user', displayName: 'DayNote' },
-          pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
-          authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required' },
-          timeout: 60000,
-        },
-      });
-      if (!cred) throw new Error('Biometric setup was cancelled.');
-      kvSet('biometricCredId', btoa(String.fromCharCode(...new Uint8Array(cred.rawId))));
+      const plugin = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.NativeBiometric;
+      if (!plugin) throw new Error('Biometric unlock isn\u2019t available on this device.');
+      try {
+        await plugin.verifyIdentity({
+          reason: 'Confirm it\u2019s you to enable fingerprint unlock',
+          title: 'Enable fingerprint unlock',
+          subtitle: 'DayNote',
+        });
+      } catch (e) {
+        throw new Error('Biometric setup was cancelled.');
+      }
+      kvSet('biometricEnabled', true);
+      kvDelete('biometricCredId'); // leftover key from the old WebAuthn-based version, if present
       return true;
     },
     async verifyBiometric() {
-      const storedId = kvGet('biometricCredId', null);
-      if (!storedId) return false;
-      const rawId = Uint8Array.from(atob(storedId), (c) => c.charCodeAt(0));
-      const challenge = crypto.getRandomValues(new Uint8Array(32));
+      if (!kvGet('biometricEnabled', false)) return false;
+      const plugin = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.NativeBiometric;
+      if (!plugin) return false;
       try {
-        const assertion = await navigator.credentials.get({
-          publicKey: {
-            challenge,
-            allowCredentials: [{ id: rawId, type: 'public-key' }],
-            userVerification: 'required',
-            timeout: 60000,
-          },
-        });
-        return !!assertion;
+        await plugin.verifyIdentity({ reason: 'Unlock DayNote', title: 'Unlock DayNote' });
+        return true;
       } catch (e) {
-        return false; // cancelled, failed match, or no matching authenticator
+        return false; // cancelled, failed match, lockout, etc.
       }
     },
-    clearBiometric() { kvDelete('biometricCredId'); },
+    clearBiometric() { kvDelete('biometricEnabled'); kvDelete('biometricCredId'); },
 
     // Finance page's own ledger + budget (kept as a separate store, same
     // as it was a separate localStorage key before — this only swaps the
