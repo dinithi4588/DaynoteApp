@@ -794,13 +794,26 @@ Pages.notes = (() => {
         btn.onclick = (e) => { e.stopPropagation(); openColorSwatchPicker(btn); };
       }
       function openColorSwatchPicker(btn) {
+        // A second tap on the same trigger just closes the picker again --
+        // same toggle behaviour as every other footer popover.
+        const alreadyOpenForThisBtn = colorPop.classList.contains('open') && activeSwatchBtn === btn;
+        // If this swatch button lives inside another popover (bg-color-input
+        // is inside the "Page background" panel, shape-fill/shape-border are
+        // inside "Shape background"), keep that parent panel open behind the
+        // colour grid instead of the generic toggleFooterPopover closing
+        // every popover -- including the one the user just opened -- out
+        // from under itself.
+        const parentPop = btn.closest('.popover');
+        closeAllPopovers(parentPop);
+        if (alreadyOpenForThisBtn) return;
         activeSwatchBtn = btn;
         const current = (btn.value || '#000000').toLowerCase();
         colorHex.value = current.replace('#', '');
         colorGrid.querySelectorAll('.color-swatch-preset').forEach(p => {
           p.classList.toggle('selected', p.dataset.hex.toLowerCase() === current);
         });
-        toggleFooterPopover(btn, colorPop);
+        colorPop.classList.add('open');
+        positionFooterPopover(btn, colorPop);
       }
       function commitSwatchHex() {
         if (!activeSwatchBtn) return;
@@ -871,7 +884,13 @@ Pages.notes = (() => {
         if (!decoPop.contains(e.target) && e.target !== decoBtn) decoPop.classList.remove('open');
         // bgBtn now opens whichever of these two fits the current
         // selection (see bgBtn.onclick below), so both close together.
-        if (!bgPop.contains(e.target) && !shapeBgPop.contains(e.target) && e.target !== bgBtn) {
+        // colorPop is excluded here too: its "Background color" swatch
+        // button lives inside bgPop/shapeBgPop, but the popover itself is
+        // rendered as a sibling (positioned fixed), so a click landing on
+        // one of its preset swatches or its hex field isn't inside
+        // bgPop/shapeBgPop's own DOM and would otherwise be mistaken for
+        // an outside click and close the panel out from under it.
+        if (!bgPop.contains(e.target) && !shapeBgPop.contains(e.target) && !colorPop.contains(e.target) && e.target !== bgBtn) {
           bgPop.classList.remove('open');
           shapeBgPop.classList.remove('open');
         }
