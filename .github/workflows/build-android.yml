@@ -239,6 +239,17 @@ jobs:
           if ! grep -q "USE_EXACT_ALARM" "$MANIFEST"; then
             sed -i 's#<application#<uses-permission android:name="android.permission.USE_EXACT_ALARM" />\n    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" android:maxSdkVersion="32" />\n    <application#' "$MANIFEST"
           fi
+      # Required by @capgo/capacitor-native-biometric to call Android's
+      # BiometricPrompt (fingerprint/Face unlock in Settings). The plugin's
+      # own AndroidManifest.xml doesn't declare this permission itself, so
+      # -- same reasoning as the exact-alarm step above -- it has to be
+      # patched into the app's regenerated manifest on every build.
+      - name: Add biometric permission to Android manifest
+        run: |
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          if ! grep -q "USE_BIOMETRIC" "$MANIFEST"; then
+            sed -i 's#<application#<uses-permission android:name="android.permission.USE_BIOMETRIC" />\n    <application#' "$MANIFEST"
+          fi
       - name: Make gradlew executable
         run: chmod +x android/gradlew
       - name: Build debug APK
