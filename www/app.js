@@ -390,7 +390,16 @@ const UI = (() => {
     };
     injectAccountsMenu();
     injectDataAndLockMenu();
-    document.addEventListener('click', closeAllPopovers);
+    // NOT closeAllPopovers directly -- that unconditionally strips 'open'
+    // off every .popover on any click at all, including a click that
+    // lands INSIDE one (e.g. the journal editor's colour-swatch picker,
+    // which shares this same .popover class and is deliberately supposed
+    // to stay open while picking several colors in a row -- see the
+    // comment above its preset-click handler in pages.notes.js). Only
+    // close a popover here when the click actually lands outside it.
+    document.addEventListener('click', (e) => {
+      document.querySelectorAll('.popover.open').forEach(p => { if (!p.contains(e.target)) p.classList.remove('open'); });
+    });
   }
 
   // ---------------- Account deletion ----------------
@@ -842,6 +851,8 @@ const UI = (() => {
       return;
     }
     btn.style.display = '';
+    btn.disabled = false;
+    btn.classList.remove('ghost');
     if (DB.hasBiometric()) {
       label.textContent = 'Fingerprint / Face unlock is on';
       btn.textContent = 'Turn off fingerprint unlock';
@@ -1210,15 +1221,16 @@ const UI = (() => {
   }
 
   function guardAppLock() {
-    if (!DB.hasLockPin() || sessionStorage.getItem('daynote.unlocked') === '1') return;
+    if ((!DB.hasLockPin() && !DB.hasBiometric()) || sessionStorage.getItem('daynote.unlocked') === '1') return;
+    const pinSet = DB.hasLockPin();
     const overlay = document.createElement('div');
     overlay.className = 'applock-overlay';
     overlay.innerHTML = `
       <div class="applock-box">
         <div class="applock-icon">&#128274;</div>
         <div class="font-display applock-title">DayNote is locked</div>
-        <form id="applock-unlock-form">
-          <input type="password" inputmode="numeric" pattern="[0-9]*" id="applock-unlock-pin" placeholder="Enter PIN" autocomplete="off" autofocus />
+        <form id="applock-unlock-form" style="${pinSet ? '' : 'display:none;'}">
+          <input type="password" inputmode="numeric" pattern="[0-9]*" id="applock-unlock-pin" placeholder="Enter PIN" autocomplete="off" ${pinSet ? 'autofocus' : ''} />
           <div class="applock-error" id="applock-unlock-error" style="display:none;">Wrong PIN \u2014 try again.</div>
           <button type="submit" class="btn" style="background:var(--notes);width:100%;">Unlock</button>
         </form>
@@ -1229,17 +1241,19 @@ const UI = (() => {
     const err = $('#applock-unlock-error', overlay);
     const unlock = () => { sessionStorage.setItem('daynote.unlocked', '1'); overlay.remove(); };
 
-    $('#applock-unlock-form', overlay).onsubmit = async (e) => {
-      e.preventDefault();
-      const ok = await DB.checkLockPin(input.value.trim());
-      if (ok) {
-        unlock();
-      } else {
-        err.style.display = 'block';
-        input.value = '';
-        input.focus();
-      }
-    };
+    if (pinSet) {
+      $('#applock-unlock-form', overlay).onsubmit = async (e) => {
+        e.preventDefault();
+        const ok = await DB.checkLockPin(input.value.trim());
+        if (ok) {
+          unlock();
+        } else {
+          err.style.display = 'block';
+          input.value = '';
+          input.focus();
+        }
+      };
+    }
 
     const bioBtn = $('#applock-biometric-btn', overlay);
     const tryBiometric = async () => {
@@ -1248,12 +1262,17 @@ const UI = (() => {
       if (ok && document.body.contains(overlay)) unlock();
     };
     if (DB.hasBiometric()) {
+      // Biometric-only (no PIN set): there's no PIN form to fall back to,
+      // so this is the only way in -- keep the retry button visible and
+      // labeled for that instead of the "...instead" wording that assumes
+      // a PIN form is sitting right above it.
       bioBtn.style.display = 'block';
+      bioBtn.textContent = pinSet ? 'Use fingerprint instead' : 'Try fingerprint / face again';
       bioBtn.onclick = tryBiometric;
       tryBiometric(); // prompt automatically; PIN stays available as a fallback if it's cancelled or fails
     }
 
-    setTimeout(() => input.focus(), 50);
+    setTimeout(() => input?.focus(), 50);
   }
 
   function togglePopover(sel) {
