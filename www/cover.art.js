@@ -292,6 +292,16 @@ const CoverArt = (() => {
   // `content` is used on every page *inside* the journal.
   // ---------------------------------------------------------------
   const categories = {
+    // A completely plain, undecorated cover + content page -- pinned to
+    // plain white, not the current app theme's paper color (unlike a null
+    // background, which would follow --paper and change with the theme).
+    // Kept first so it's the first tile the person sees, before the
+    // illustrated themes.
+    blank: {
+      label: 'Blank',
+      cover: { type: 'color', value: '#ffffff' },
+      content: { type: 'color', value: '#ffffff' },
+    },
     bloom: {
       label: 'Bloom',
       cover: { type: 'image', value: toDataUri(buildFloralSvg('bloom', { quiet: false })), color: PALETTES.bloom.paper },
