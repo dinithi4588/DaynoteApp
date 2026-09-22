@@ -820,7 +820,13 @@ Pages.notes = (() => {
           if (!activeSwatchBtn) return;
           activeSwatchBtn.value = p.dataset.hex;
           activeSwatchBtn.dispatchEvent(new Event('input', { bubbles: false }));
-          colorPop.classList.remove('open');
+          colorGrid.querySelectorAll('.color-swatch-preset').forEach(sw => {
+            sw.classList.toggle('selected', sw.dataset.hex.toLowerCase() === p.dataset.hex.toLowerCase());
+          });
+          // Deliberately NOT closing colorPop here -- the palette should
+          // stay open after picking a color so it's easy to try a few in a
+          // row, and only close on an outside click / re-toggling the
+          // trigger button (see onPopoverOutsideClick below).
         };
       });
       container.querySelectorAll('.color-swatch-btn').forEach(makeColorSwatchButton);
