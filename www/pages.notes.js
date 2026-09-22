@@ -646,13 +646,13 @@ Pages.notes = (() => {
             <span class="tool-chip-icon">&#128247;</span><span class="tool-chip-label">Image</span>
           </button>
           <div class="editor-more-wrap">
-            <button type="button" class="tool-chip" id="bg-btn" title="Page background">
+            <button type="button" class="tool-chip" id="bg-btn" title="Background">
               <span class="tool-chip-icon">&#127912;</span><span class="tool-chip-label">Background</span>
             </button>
             <div class="popover footer-popover" id="bg-popover">
               <div class="popover-label">Page background</div>
               <div class="richtext-controls" style="align-items:center;gap:10px;padding:6px 12px;">
-                <input type="color" id="bg-color-input" value="#f6efe2" title="Background color" />
+                <button type="button" class="color-swatch-btn" id="bg-color-input" data-value="#f6efe2" title="Background color" aria-label="Background color"></button>
                 <span style="font-size:.78rem;color:var(--ink-soft);">Color</span>
               </div>
               <button type="button" class="popover-item" id="bg-upload-item"><span>&#128247;</span><span>Upload image</span></button>
@@ -662,19 +662,16 @@ Pages.notes = (() => {
               <div class="popover-divider"></div>
               <button type="button" class="popover-item danger" id="bg-clear-item"><span>&#10005;</span><span>Clear background</span></button>
             </div>
-          </div>
-          <div class="editor-more-wrap" id="shape-bg-wrap" style="display:none;">
-            <button type="button" class="tool-chip" id="shape-bg-btn" title="Shape background">
-              <span class="tool-chip-icon">&#127912;</span><span class="tool-chip-label">Background</span>
-            </button>
+            <!-- Shown by the same Background button instead of bg-popover
+                 whenever a shape/note box is selected -- see bgBtn.onclick. -->
             <div class="popover footer-popover" id="shape-bg-popover">
               <div class="popover-label">Shape background</div>
               <div class="richtext-controls" style="align-items:center;gap:10px;padding:6px 12px;">
-                <input type="color" id="shape-fill" value="#f5eee8" title="Shape fill color" />
+                <button type="button" class="color-swatch-btn" id="shape-fill" data-value="#f5eee8" title="Shape fill color" aria-label="Shape fill color"></button>
                 <span style="font-size:.78rem;color:var(--ink-soft);">Fill color</span>
               </div>
               <div class="richtext-controls" style="align-items:center;gap:10px;padding:6px 12px;">
-                <input type="color" id="shape-border" value="#8d7565" title="Shape border color" />
+                <button type="button" class="color-swatch-btn" id="shape-border" data-value="#8d7565" title="Shape border color" aria-label="Shape border color"></button>
                 <span style="font-size:.78rem;color:var(--ink-soft);">Border color</span>
               </div>
             </div>
@@ -687,20 +684,20 @@ Pages.notes = (() => {
               <button type="button" class="zoom-btn draw-tool-btn active" id="draw-tool-pen" title="Pen">&#9998;</button>
               <button type="button" class="zoom-btn draw-tool-btn" id="draw-tool-highlighter" title="Highlighter">&#128998;</button>
               <button type="button" class="zoom-btn draw-tool-btn" id="draw-tool-eraser" title="Eraser">&#9003;</button>
-              <input type="color" id="draw-color" value="#49372d" title="Brush color" />
+              <button type="button" class="color-swatch-btn" id="draw-color" data-value="#49372d" title="Brush color" aria-label="Brush color"></button>
               <input type="range" id="draw-size" min="1" max="24" value="4" title="Brush size" />
             </div>
             <span class="tool-chip-label">Brush</span>
           </div>
           <div class="tool-chip tool-chip-static">
             <div class="richtext-controls">
-              <input type="color" id="rt-color" value="#302923" title="Text color (selection)" />
+              <button type="button" class="color-swatch-btn" id="rt-color" data-value="#302923" title="Text color (selection)" aria-label="Text color"></button>
             </div>
             <span class="tool-chip-label">Text color</span>
           </div>
           <div class="tool-chip tool-chip-static">
             <div class="richtext-controls">
-              <input type="color" id="rt-highlight" value="#fff2a8" title="Highlight color (selection)" />
+              <button type="button" class="color-swatch-btn" id="rt-highlight" data-value="#fff2a8" title="Highlight color (selection)" aria-label="Highlight color"></button>
             </div>
             <span class="tool-chip-label">Highlight</span>
           </div>
@@ -749,10 +746,84 @@ Pages.notes = (() => {
             <span class="tool-chip-label">Zoom</span>
           </div>
         </div>
+        <!-- Shared custom color picker for every .color-swatch-btn above.
+             Android's WebView (unlike Chrome) has no built-in dialog for
+             <input type="color">, so every color control in this editor is
+             a plain button with its own swatch, and they all open this one
+             popover to pick a value instead. -->
+        <div class="popover footer-popover color-swatch-popover" id="color-swatch-popover">
+          <div class="popover-label">Color</div>
+          <div class="color-swatch-grid" id="color-swatch-grid"></div>
+          <div class="color-swatch-hex-row">
+            <span class="color-swatch-hex-prefix">#</span>
+            <input type="text" id="color-swatch-hex" maxlength="6" inputmode="text" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="f6efe2" />
+          </div>
+        </div>
       `;
       const $ = sel => container.querySelector(sel);
 
       $('#editor-back-btn').onclick = () => { showGrid(); };
+
+      // ---- custom color picker (see the CSS comment above the popover
+      // markup for why this replaces native <input type="color">) ----
+      const COLOR_PRESETS = [
+        '#1a1a1a', '#302923', '#49372d', '#5c3a22', '#7a2e2e', '#8d7565',
+        '#c1272d', '#b8860b', '#4a6b3d', '#6f8a63', '#93a878', '#a7b592',
+        '#d9a878', '#e39aa2', '#c9dcb9', '#f3f6ee', '#f7f1ea', '#fdf3f2',
+        '#f6efe2', '#f5eee8', '#faf1e6', '#fff2a8', '#ffffff', '#000000',
+      ];
+      const colorPop = $('#color-swatch-popover');
+      const colorGrid = $('#color-swatch-grid');
+      const colorHex = $('#color-swatch-hex');
+      let activeSwatchBtn = null;
+      colorGrid.innerHTML = COLOR_PRESETS.map(hex =>
+        `<button type="button" class="color-swatch-preset" data-hex="${hex}" style="background:${hex};" title="${hex}"></button>`
+      ).join('');
+      function makeColorSwatchButton(btn) {
+        let val = btn.getAttribute('data-value') || '#000000';
+        btn.style.background = val;
+        Object.defineProperty(btn, 'value', {
+          get() { return val; },
+          set(v) {
+            if (!v || v === val) { val = v || val; return; }
+            val = v;
+            btn.style.background = v;
+            btn.setAttribute('data-value', v);
+          },
+        });
+        btn.onclick = (e) => { e.stopPropagation(); openColorSwatchPicker(btn); };
+      }
+      function openColorSwatchPicker(btn) {
+        activeSwatchBtn = btn;
+        const current = (btn.value || '#000000').toLowerCase();
+        colorHex.value = current.replace('#', '');
+        colorGrid.querySelectorAll('.color-swatch-preset').forEach(p => {
+          p.classList.toggle('selected', p.dataset.hex.toLowerCase() === current);
+        });
+        toggleFooterPopover(btn, colorPop);
+      }
+      function commitSwatchHex() {
+        if (!activeSwatchBtn) return;
+        const v = '#' + colorHex.value.trim().replace(/^#/, '').toLowerCase();
+        if (!/^#[0-9a-f]{6}$/.test(v)) return;
+        activeSwatchBtn.value = v;
+        activeSwatchBtn.dispatchEvent(new Event('input', { bubbles: false }));
+        colorGrid.querySelectorAll('.color-swatch-preset').forEach(p => {
+          p.classList.toggle('selected', p.dataset.hex.toLowerCase() === v);
+        });
+      }
+      let colorHexTimer = null;
+      colorHex.oninput = () => { clearTimeout(colorHexTimer); colorHexTimer = setTimeout(commitSwatchHex, 150); };
+      colorHex.onblur = commitSwatchHex;
+      colorGrid.querySelectorAll('.color-swatch-preset').forEach(p => {
+        p.onclick = () => {
+          if (!activeSwatchBtn) return;
+          activeSwatchBtn.value = p.dataset.hex;
+          activeSwatchBtn.dispatchEvent(new Event('input', { bubbles: false }));
+          colorPop.classList.remove('open');
+        };
+      });
+      container.querySelectorAll('.color-swatch-btn').forEach(makeColorSwatchButton);
 
       // ---- title ----
       const titleInput = $('#editor-title-input');
@@ -781,20 +852,25 @@ Pages.notes = (() => {
       const decoPop = $('#deco-popover');
       const bgBtn = $('#bg-btn');
       const bgPop = $('#bg-popover');
-      const shapeBgBtn = $('#shape-bg-btn');
       const shapeBgPop = $('#shape-bg-popover');
+      let currentSelectionType = null;
       const railAddBtn = $('#page-rail-add');
       const pageTypePop = $('#page-type-popover');
       function closeAllPopovers(except) {
-        [morePop, shapePop, decoPop, bgPop, shapeBgPop, pageTypePop].forEach(p => { if (p !== except) p.classList.remove('open'); });
+        [morePop, shapePop, decoPop, bgPop, shapeBgPop, pageTypePop, colorPop].forEach(p => { if (p !== except) p.classList.remove('open'); });
       }
       function onPopoverOutsideClick(e) {
         if (!morePop.contains(e.target) && e.target !== moreBtn) morePop.classList.remove('open');
         if (!shapePop.contains(e.target) && e.target !== shapeBtn) shapePop.classList.remove('open');
         if (!decoPop.contains(e.target) && e.target !== decoBtn) decoPop.classList.remove('open');
-        if (!bgPop.contains(e.target) && e.target !== bgBtn) bgPop.classList.remove('open');
-        if (!shapeBgPop.contains(e.target) && e.target !== shapeBgBtn) shapeBgPop.classList.remove('open');
+        // bgBtn now opens whichever of these two fits the current
+        // selection (see bgBtn.onclick below), so both close together.
+        if (!bgPop.contains(e.target) && !shapeBgPop.contains(e.target) && e.target !== bgBtn) {
+          bgPop.classList.remove('open');
+          shapeBgPop.classList.remove('open');
+        }
         if (!pageTypePop.contains(e.target) && e.target !== railAddBtn) pageTypePop.classList.remove('open');
+        if (!colorPop.contains(e.target) && !e.target.closest?.('.color-swatch-btn')) colorPop.classList.remove('open');
       }
       // Places a footer popover just under (or, if there's no room, just
       // above) whichever button opened it, clamped to stay on-screen.
@@ -816,8 +892,11 @@ Pages.notes = (() => {
       moreBtn.onclick = (e) => { e.stopPropagation(); closeAllPopovers(morePop); morePop.classList.toggle('open'); };
       shapeBtn.onclick = (e) => { e.stopPropagation(); toggleFooterPopover(shapeBtn, shapePop); };
       decoBtn.onclick = (e) => { e.stopPropagation(); toggleFooterPopover(decoBtn, decoPop); };
-      bgBtn.onclick = (e) => { e.stopPropagation(); toggleFooterPopover(bgBtn, bgPop); };
-      shapeBgBtn.onclick = (e) => { e.stopPropagation(); toggleFooterPopover(shapeBgBtn, shapeBgPop); };
+      // One "Background" button for both cases: with a shape/note box
+      // selected it changes that shape's fill/border, otherwise it
+      // changes the page's own background (see currentSelectionType,
+      // kept up to date by onSelectionChange below).
+      bgBtn.onclick = (e) => { e.stopPropagation(); toggleFooterPopover(bgBtn, currentSelectionType === 'shape' ? shapeBgPop : bgPop); };
       railAddBtn.onclick = (e) => { e.stopPropagation(); toggleFooterPopover(railAddBtn, pageTypePop); };
       pageTypePop.querySelectorAll('.popover-item').forEach(btn => {
         btn.onclick = () => { pageTypePop.classList.remove('open'); addPage(btn.dataset.pattern); };
@@ -999,10 +1078,12 @@ Pages.notes = (() => {
             // visual scale (responsive fit + pinch zoom), not just zoom.
             getZoom: () => fitScale * zoom,
             onSelectionChange: (type) => {
-              // The shape-background popover reuses the same palette icon as
-              // the page-background one, so it lives in the toolbar the same
-              // way: hidden until a shape (including a Note box) is selected.
-              if (shapeBgWrap) shapeBgWrap.style.display = type === 'shape' ? '' : 'none';
+              // The single Background button opens either popover depending
+              // on this — see bgBtn.onclick above. If the shape popover
+              // happened to be open when the selection changes away from a
+              // shape (e.g. tapping an empty area), close it too.
+              currentSelectionType = type;
+              if (type !== 'shape' && shapeBgPop.classList.contains('open')) shapeBgPop.classList.remove('open');
             },
           }
         );
@@ -1102,7 +1183,6 @@ Pages.notes = (() => {
         document.removeEventListener('pointercancel', onPanEnd);
       });
 
-      const shapeBgWrap = $('#shape-bg-wrap');
       renderActivePage();
 
       // ---- tools (act on the currently displayed page) ----
