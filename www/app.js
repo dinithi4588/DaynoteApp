@@ -39,6 +39,7 @@ const UI = (() => {
     guardOnboarding(() => {
       guardAppLock();
       wireTopbar(); // refresh in case onboarding just set the profile
+      injectAccountsMenu(); // ...and refresh the popover's account/email list too
       buildTodaySummary();
     });
     document.documentElement.setAttribute('data-theme', DB.getTheme());
@@ -523,20 +524,34 @@ const UI = (() => {
   }
 
   // ---------------- Accounts: switcher + "Add account" ----------------
+  // Called once from buildProfilePopover() (at init, before onboarding/
+  // sign-in has necessarily finished) AND again right after a first-time
+  // Google sign-in completes (see guardOnboarding's onDone in init()) --
+  // that second call is what makes the just-signed-in email show up
+  // without needing a page reload. The wrap/button are only created once
+  // (guarded below); the account list itself is re-rendered every call
+  // so it always reflects whatever DB.listAccounts() has right now.
   function injectAccountsMenu() {
     const popover = $('#profile-popover');
     const accountLabel = popover?.querySelector('.popover-label');
-    if (!popover || !accountLabel || $('#add-account-item')) return;
+    if (!popover || !accountLabel) return;
 
-    const wrap = document.createElement('div');
-    wrap.id = 'accounts-list-wrap';
-    accountLabel.insertAdjacentElement('afterend', wrap);
+    let wrap = $('#accounts-list-wrap');
+    if (!wrap) {
+      wrap = document.createElement('div');
+      wrap.id = 'accounts-list-wrap';
+      accountLabel.insertAdjacentElement('afterend', wrap);
 
-    const addBtn = document.createElement('button');
-    addBtn.className = 'popover-item';
-    addBtn.id = 'add-account-item';
-    addBtn.innerHTML = '<span>&#10133;</span><span>Add account</span>';
-    wrap.insertAdjacentElement('afterend', addBtn);
+      const addBtn = document.createElement('button');
+      addBtn.className = 'popover-item';
+      addBtn.id = 'add-account-item';
+      addBtn.innerHTML = '<span>&#10133;</span><span>Add account</span>';
+      wrap.insertAdjacentElement('afterend', addBtn);
+      addBtn.onclick = () => {
+        closeAllPopovers();
+        openAddAccountForm(() => { renderAccounts(); wireTopbar(); });
+      };
+    }
 
     function renderAccounts() {
       const accounts = DB.listAccounts();
@@ -556,11 +571,6 @@ const UI = (() => {
       });
     }
     renderAccounts();
-
-    addBtn.onclick = () => {
-      closeAllPopovers();
-      openAddAccountForm(() => { renderAccounts(); wireTopbar(); });
-    };
   }
 
   function buildAddAccountModalOnce() {
