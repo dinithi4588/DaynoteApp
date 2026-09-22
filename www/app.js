@@ -413,7 +413,10 @@ const UI = (() => {
     if (result && result.ok) {
       closeModal('#deleteauth-modal-scrim');
       showToast('Account deleted', 'Your account and all data on this device were removed.');
-      setTimeout(() => location.reload(), 900);
+      // Land on Home for the next sign-in/sign-up, not wherever the person
+      // happened to be (e.g. deep in Journal) -- a fresh account should
+      // start fresh, not resume mid-page-of-a-now-deleted-account.
+      setTimeout(() => { location.href = 'index.html'; }, 900);
       return;
     }
     if (result && result.needsReauth) { showDeleteReauthModal(result); return; }
