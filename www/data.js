@@ -319,6 +319,219 @@ const DB = (() => {
     getTheme() { return kvGet('theme', 'parchment'); },
     setTheme(id) { kvSet('theme', id); },
 
+    // ---- Task sharing (real, Firestore-backed) ----
+    // A "workspace" is which task list is currently being viewed:
+    // 'personal' (the default, private list, stored in IndexedDB like
+    // everything else) or the Firestore doc id of a `shareLists/{id}`
+    // document you're a member of. Personal tasks never touch the
+    // network; shared tasks live entirely in Firestore (see
+    // `sharedTasks` below) so both members see the same live list.
+    //
+    // Firestore layout:
+    //   emails/{email}         -> { uid }             (lookup by email)
+    //   usernames/{username}   -> { uid }              (lookup by @username, optional)
+    //   shareLists/{listId}    -> { members: [uidA, uidB],
+    //                                memberLabels: [labelA, labelB],  // each person's email or @username, as of when the list was created
+    //                                createdAt }
+    //   shareLists/{listId}/tasks/{taskId} -> same shape as a local task
+    //
+    // `sharedWorkspaces` in kv is just a local cache of "which shared
+    // lists am I in, and what should I call them" so the popover can
+    // render instantly without waiting on a round trip every time —
+    // refreshShared() below is what keeps that cache honest.
+    workspaces: {
+      list() { return kvGet('sharedWorkspaces', []); }, // [{id, name, uid}] — id is the shareLists doc id
+      getActive() { return kvGet('activeTaskWorkspace', 'personal'); },
+      setActive(id) { kvSet('activeTaskWorkspace', id); },
+      activeName() {
+        const id = kvGet('activeTaskWorkspace', 'personal');
+        if (id === 'personal') return 'Personal';
+        const found = kvGet('sharedWorkspaces', []).find((p) => p.id === id);
+        return found ? found.name : 'Personal';
+      },
+      // Your own chosen @username, if you've set one (see setUsername).
+      getUsername() { return DB.getProfile()?.username || null; },
+      // Claims username as yours, so others can invite you by it instead
+      // of your email. 3-20 chars, lowercase letters/numbers/underscore.
+      // Frees up your previous username (if any) so it's available again.
+      async setUsername(username) {
+        const user = await firebaseUserReady();
+        if (!user) throw new Error('Sign in with a real account first.');
+        if (typeof firebase === 'undefined' || !firebase.firestore) throw new Error('Not available right now.');
+        const clean = username.trim().toLowerCase().replace(/^@/, '');
+        if (!/^[a-z0-9_]{3,20}$/.test(clean)) throw new Error('Usernames are 3\u201320 characters: letters, numbers, underscore.');
+        const db = firebase.firestore();
+        const ref = db.collection('usernames').doc(clean);
+        const existing = await ref.get();
+        if (existing.exists && existing.data().uid !== user.uid) throw new Error('That username is already taken.');
+        const oldUsername = DB.getProfile()?.username;
+        await ref.set({ uid: user.uid });
+        if (oldUsername && oldUsername !== clean) {
+          db.collection('usernames').doc(oldUsername).delete().catch(() => {});
+        }
+        DB.setProfile({ username: clean });
+        return clean;
+      },
+      // Writes a lookup doc so other accounts can find this user by
+      // email later. Call once right after a real sign-in/sign-up —
+      // safe to call repeatedly, it just overwrites the same doc.
+      async ensureEmailIndex() {
+        const user = await firebaseUserReady();
+        if (!user || !user.email || typeof firebase === 'undefined' || !firebase.firestore) return;
+        try {
+          await firebase.firestore().collection('emails').doc(user.email.toLowerCase()).set({ uid: user.uid });
+        } catch (e) { console.error('DayNote: could not write email index', e); }
+      },
+      // Pulls the current list of shareLists this account belongs to
+      // and refreshes the local cache (kv 'sharedWorkspaces') so
+      // list()/activeName() reflect lists another person has invited
+      // you to as well, not just ones you created yourself.
+      async refreshShared() {
+        const user = await firebaseUserReady();
+        if (!user || typeof firebase === 'undefined' || !firebase.firestore) return kvGet('sharedWorkspaces', []);
+        try {
+          const snap = await firebase.firestore().collection('shareLists').where('members', 'array-contains', user.uid).get();
+          const mine = snap.docs.map((doc) => {
+            const d = doc.data();
+            const myIdx = (d.members || []).indexOf(user.uid);
+            const otherIdx = myIdx === 0 ? 1 : 0;
+            const name = (d.memberLabels && d.memberLabels[otherIdx]) || 'Shared list';
+            return { id: doc.id, name, uid: d.members[otherIdx] };
+          });
+          kvSet('sharedWorkspaces', mine);
+          return mine;
+        } catch (e) {
+          console.error('DayNote: could not refresh shared lists', e);
+          return kvGet('sharedWorkspaces', []);
+        }
+      },
+      // Looks the given identifier up — an email, or an @username (with
+      // or without the @) — and creates a new shareLists doc with both
+      // accounts as members. Throws a short, user-facing message on
+      // failure rather than a raw Firestore error.
+      async addPerson(identifier) {
+        const user = await firebaseUserReady();
+        if (!user) throw new Error('Sign in with a real account first to share tasks.');
+        if (typeof firebase === 'undefined' || !firebase.firestore) throw new Error('Sharing isn\u2019t available right now.');
+        const raw = identifier.trim();
+        if (!raw) throw new Error('Enter an email or username.');
+        const db = firebase.firestore();
+        let otherUid, otherLabel;
+        if (raw.includes('@') && !raw.startsWith('@')) {
+          const cleanEmail = raw.toLowerCase();
+          if (cleanEmail === (user.email || '').toLowerCase()) throw new Error('That\u2019s your own account.');
+          const lookup = await db.collection('emails').doc(cleanEmail).get();
+          if (!lookup.exists) throw new Error('No DayNote account found for that email.');
+          otherUid = lookup.data().uid;
+          otherLabel = cleanEmail;
+        } else {
+          const cleanUsername = raw.replace(/^@/, '').toLowerCase();
+          const lookup = await db.collection('usernames').doc(cleanUsername).get();
+          if (!lookup.exists) throw new Error('No DayNote account found for that username.');
+          otherUid = lookup.data().uid;
+          if (otherUid === user.uid) throw new Error('That\u2019s your own account.');
+          otherLabel = '@' + cleanUsername;
+        }
+        const existing = kvGet('sharedWorkspaces', []);
+        // Already sharing with this person? Reuse that list instead of
+        // creating a duplicate one.
+        const already = existing.find((p) => p.uid === otherUid);
+        if (already) return already;
+        const myUsername = DB.getProfile()?.username;
+        const myLabel = myUsername ? '@' + myUsername : ((user.email || 'You').toLowerCase());
+        const doc = await db.collection('shareLists').add({
+          members: [user.uid, otherUid],
+          memberLabels: [myLabel, otherLabel],
+          createdAt: Date.now(),
+        });
+        const person = { id: doc.id, name: otherLabel, uid: otherUid };
+        kvSet('sharedWorkspaces', [...existing, person]);
+        return person;
+      },
+      // Removes a shared list from THIS account's view only (drops it
+      // from the local cache and switches back to Personal if it was
+      // active) — it does not delete the Firestore doc or affect the
+      // other member, who keeps seeing it until they remove it too.
+      remove(id) {
+        kvSet('sharedWorkspaces', kvGet('sharedWorkspaces', []).filter((p) => p.id !== id));
+        if (kvGet('activeTaskWorkspace', 'personal') === id) kvSet('activeTaskWorkspace', 'personal');
+      },
+      // Subscribes to every shared list this account belongs to so
+      // reminders keep firing for shared tasks even when the Tasks page
+      // isn't open (same "only while the app is open" limitation as
+      // personal reminders — see notifications.js). Call once at
+      // startup for a signed-in user; safe to call again.
+      async startSharedSync() {
+        const user = await firebaseUserReady();
+        if (!user || typeof firebase === 'undefined' || !firebase.firestore) return;
+        const lists = await this.refreshShared();
+        lists.forEach((p) => DB.sharedTasks.subscribe(p.id, () => {})); // keeps the notification cache warm
+      },
+    },
+
+    // ---- Shared task list CRUD (Firestore) ----
+    // Mirrors the shape of the local `events` collection (title, date,
+    // time, notes, done, repeat, dailyWeeks, doneDates, reminder) but
+    // reads/writes shareLists/{listId}/tasks instead of IndexedDB, so
+    // both members of a shared list see the same data in real time.
+    sharedTasks: (() => {
+      // listId -> latest array of tasks (each tagged with workspaceId).
+      // Read by notifications.js's poll() so shared-task reminders fire
+      // alongside personal ones without a separate polling path.
+      const cache = {};
+      // One real Firestore listener per listId, kept alive for the rest
+      // of the page's lifetime once started (so switching the Tasks page
+      // away from a shared list and back doesn't drop and re-create the
+      // subscription, and reminders for it keep working in the
+      // background) — listeners[listId] is the set of callers (e.g. the
+      // Tasks page's renderList) currently wanting to know when it changes.
+      const firestoreUnsubs = {};
+      const listeners = {};
+      function col(listId) { return firebase.firestore().collection('shareLists').doc(listId).collection('tasks'); }
+      return {
+        // Registers cb to be called with the current task array whenever
+        // this shared list changes. If a Firestore listener for this
+        // list is already running (started here or by
+        // workspaces.startSharedSync), reuses it and delivers whatever
+        // it already has right away instead of waiting for the next
+        // change. Returns an unsubscribe fn that only removes THIS
+        // callback — it leaves the underlying Firestore listener (and
+        // any other callers' callbacks) running.
+        subscribe(listId, cb) {
+          if (typeof firebase === 'undefined' || !firebase.firestore) return () => {};
+          if (!listeners[listId]) listeners[listId] = new Set();
+          listeners[listId].add(cb);
+          if (!firestoreUnsubs[listId]) {
+            firestoreUnsubs[listId] = col(listId).onSnapshot((snap) => {
+              const tasks = snap.docs.map((doc) => ({ id: doc.id, workspaceId: listId, ...doc.data() }));
+              cache[listId] = tasks;
+              listeners[listId].forEach((fn) => fn(tasks));
+            }, (e) => console.error('DayNote: shared task listener failed', e));
+          } else if (cache[listId]) {
+            Promise.resolve().then(() => cb(cache[listId]));
+          }
+          return () => { listeners[listId]?.delete(cb); };
+        },
+        async create(listId, payload) {
+          const doc = await col(listId).add(payload);
+          return { id: doc.id, workspaceId: listId, ...payload };
+        },
+        async update(listId, taskId, patch) {
+          await col(listId).doc(taskId).update(patch);
+          return { id: taskId, workspaceId: listId, ...patch };
+        },
+        async remove(listId, taskId) {
+          await col(listId).doc(taskId).delete();
+        },
+        // Every task from every shared list currently being watched —
+        // used by notifications.js so it doesn't need its own Firestore
+        // listeners. Only reflects lists that have had subscribe()
+        // called at least once this session (see workspaces.startSharedSync).
+        allCached() { return Object.values(cache).flat(); },
+      };
+    })(),
+
+
     getProfile() { return kvGet('profile', { name: 'You', email: 'you@example.com' }); },
     setProfile(patch) { kvSet('profile', { ...kvGet('profile', {}), ...patch }); },
 
