@@ -140,14 +140,23 @@ Pages.tasks = (() => {
     return true;
   }
 
+  let lastContainer = null; // lets refresh() (called from app.js's share popover) redraw after switching lists
+  let unsubShared = null; // stops this page's own listener when it re-renders (doesn't touch the underlying Firestore subscription — see DB.sharedTasks.subscribe)
+  let sharedCache = []; // latest tasks for the active shared workspace, kept current by that subscription
+
   function render(container) {
+    lastContainer = container;
+    if (unsubShared) { unsubShared(); unsubShared = null; }
     let selectedDate = Modals.todayStr();
+    const workspaceName = DB.workspaces.activeName();
+    const activeWorkspaceForRender = DB.workspaces.getActive();
 
     container.innerHTML = `
       <div class="page-head">
         <div>
           <p class="eyebrow">${new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}</p>
           <h1 class="page-title font-display">Tasks</h1>
+          ${workspaceName !== 'Personal' ? `<p class="eyebrow" style="margin-top:2px;">Shared with ${UI.escapeHtml(workspaceName)}</p>` : ''}
         </div>
       </div>
 
@@ -201,7 +210,9 @@ Pages.tasks = (() => {
     $('#tasks-date-next').onclick = () => goToDate(addDays(selectedDate, 1));
 
     /* ---- add one-off task (shared entry modal / FAB) ---- */
-    const openAdd = () => Modals.openEntryModal({ defaults: { type: 'task', date: selectedDate }, onSaved: renderList });
+    // Tagged with the workspace being viewed, so a task added while looking
+    // at a shared list lands in that list rather than the personal one.
+    const openAdd = () => Modals.openEntryModal({ defaults: { type: 'task', date: selectedDate, workspaceId: DB.workspaces.getActive() }, onSaved: renderList });
     $('#task-fab').onclick = openAdd;
 
     // Close a revealed swipe-to-delete row when the user taps anywhere
@@ -210,13 +221,26 @@ Pages.tasks = (() => {
       if (openSwipeContent && !openSwipeContent.contains(e.target)) closeOpenSwipe();
     }, true);
 
+    // Live sync for a shared list: any change either person makes (add,
+    // check off, edit, delete) re-renders this page automatically. Not
+    // needed for Personal, which reads straight from local IndexedDB.
+    if (activeWorkspaceForRender !== 'personal') {
+      unsubShared = DB.sharedTasks.subscribe(activeWorkspaceForRender, (tasks) => {
+        sharedCache = tasks;
+        renderList();
+      });
+    }
+
     renderList();
 
     function renderList() {
       closeOpenSwipe();
       const list = $('#task-list');
       const today = Modals.todayStr();
-      let tasks = DB.events.list().filter(e => e.type === 'task');
+      const activeWorkspace = DB.workspaces.getActive();
+      let tasks = activeWorkspace === 'personal'
+        ? DB.events.list().filter(e => e.type === 'task' && (e.workspaceId || 'personal') === 'personal')
+        : [...sharedCache];
 
       if (filter === 'upcoming') tasks = tasks.filter(t => (t.repeat === 'daily' || t.repeat === 'weekly') ? (isActiveOn(t, selectedDate) && !isDoneForView(t, selectedDate)) : !t.done);
       else if (filter === 'done') tasks = tasks.filter(t => isDoneForView(t, selectedDate));
@@ -283,24 +307,41 @@ Pages.tasks = (() => {
         };
         row.querySelector('.checkbox').onclick = (e) => {
           e.stopPropagation();
-          if (isDaily) {
-            const doneDates = new Set(t.doneDates || []);
-            if (doneDates.has(selectedDate)) doneDates.delete(selectedDate); else doneDates.add(selectedDate);
-            DB.events.update(t.id, { doneDates: [...doneDates] });
+          const patch = isDaily
+            ? (() => { const doneDates = new Set(t.doneDates || []); doneDates.has(selectedDate) ? doneDates.delete(selectedDate) : doneDates.add(selectedDate); return { doneDates: [...doneDates] }; })()
+            : { done: !t.done };
+          if (activeWorkspace === 'personal') {
+            DB.events.update(t.id, patch);
+            renderList();
           } else {
-            DB.events.update(t.id, { done: !t.done });
+            DB.sharedTasks.update(activeWorkspace, t.id, patch).catch(() => UI.showToast('Couldn\u2019t update task', 'Check your connection and try again.'));
+            // no manual renderList() here — the shared subscription's
+            // onSnapshot callback re-renders once the write lands, the
+            // same moment it would for the other person too.
           }
-          renderList();
         };
         attachSwipeToDelete(
           clipEl, contentEl,
           () => {}, // row content is no longer tap-to-edit — use the edit icon
-          () => { DB.events.remove(t.id); renderList(); }
+          () => {
+            if (activeWorkspace === 'personal') {
+              DB.events.remove(t.id);
+              renderList();
+            } else {
+              DB.sharedTasks.remove(activeWorkspace, t.id).catch(() => UI.showToast('Couldn\u2019t delete task', 'Check your connection and try again.'));
+            }
+          }
         );
         list.appendChild(row);
       });
     }
   }
 
-  return { render };
+  return {
+    render,
+    // Re-renders the whole page (title + list) against whatever
+    // workspace is now active — called after the share popover
+    // switches lists.
+    refresh() { if (lastContainer) render(lastContainer); },
+  };
 })();
