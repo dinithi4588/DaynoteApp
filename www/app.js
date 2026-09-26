@@ -47,11 +47,13 @@ const UI = (() => {
     buildBottomNav();
     buildTodaySummary();
     buildProfilePopover();
+    buildSharePopover();
     buildThemeModal();
     wireTopbar();
     wireModalDismissal();
     highlightNav(currentPage);
     if (typeof Reminders !== 'undefined') Reminders.start();
+    if (typeof DB.workspaces?.startSharedSync === 'function') DB.workspaces.startSharedSync();
     registerServiceWorker();
     wireInstallPrompt();
     checkForAppUpdate();
@@ -390,6 +392,7 @@ const UI = (() => {
     };
     injectAccountsMenu();
     injectDataAndLockMenu();
+    injectUsernameMenu();
     // NOT closeAllPopovers directly -- that unconditionally strips 'open'
     // off every .popover on any click at all, including a click that
     // lands INSIDE one (e.g. the journal editor's colour-swatch picker,
@@ -399,6 +402,66 @@ const UI = (() => {
     // close a popover here when the click actually lands outside it.
     document.addEventListener('click', (e) => {
       document.querySelectorAll('.popover.open').forEach(p => { if (!p.contains(e.target)) p.classList.remove('open'); });
+    });
+  }
+
+  // ---------------- Task sharing popover (tasks page only) ----------------
+  // The share-btn/share-popover markup only exists in tasks.html, so this
+  // is a no-op on every other page.
+  function buildSharePopover() {
+    const btn = $('#share-btn');
+    if (!btn) return;
+    btn.onclick = async (e) => {
+      e.stopPropagation();
+      renderSharePopoverList(); // show the cached list instantly...
+      renderMyUsername();
+      togglePopover('#share-popover');
+      await DB.workspaces.refreshShared(); // ...then refresh in case another person added you
+      if ($('#share-popover').classList.contains('open')) renderSharePopoverList();
+    };
+    $('#share-add-item').onclick = async () => {
+      const identifier = prompt('Add a person by their DayNote email or @username to share your task list with them:');
+      if (!identifier || !identifier.trim()) return;
+      const btnRow = $('#share-add-item');
+      const original = btnRow.innerHTML;
+      btnRow.innerHTML = '<span></span><span>Adding\u2026</span>';
+      try {
+        const person = await DB.workspaces.addPerson(identifier);
+        DB.workspaces.setActive(person.id);
+        closeAllPopovers();
+        Pages.tasks?.refresh?.();
+        showToast('Task list shared', `You and ${person.name} now share this list.`);
+      } catch (err) {
+        showToast('Couldn\u2019t add that person', err.message || 'Please try again.');
+      } finally {
+        btnRow.innerHTML = original;
+      }
+    };
+  }
+  function renderMyUsername() {
+    const row = $('#share-my-username');
+    if (!row) return;
+    const username = DB.workspaces.getUsername();
+    // Just a reminder of your own handle so you know what to give someone
+    // else to invite you — changing it happens from the account popover.
+    row.textContent = username ? `You: @${username}` : 'Set a username in your account menu to be added by it';
+  }
+  function renderSharePopoverList() {
+    const wrap = $('#share-popover-list');
+    if (!wrap) return;
+    const active = DB.workspaces.getActive();
+    const rows = [{ id: 'personal', name: 'Personal' }, ...DB.workspaces.list()];
+    wrap.innerHTML = rows.map(p => `
+      <button class="popover-item share-person-item" data-id="${p.id}" style="${p.id === active ? 'font-weight:700;' : ''}">
+        <span class="checkbox ${p.id === active ? 'checked' : ''}" style="pointer-events:none;">${p.id === active ? '\u2713' : ''}</span><span>${UI.escapeHtml(p.name)}</span>
+      </button>
+    `).join('');
+    wrap.querySelectorAll('.share-person-item').forEach(b => {
+      b.onclick = () => {
+        DB.workspaces.setActive(b.dataset.id);
+        closeAllPopovers();
+        Pages.tasks?.refresh?.();
+      };
     });
   }
 
@@ -636,6 +699,7 @@ const UI = (() => {
     // switches Firebase's active session too, not just the display name.
     const finishWithFirebaseUser = (user) => {
       DB.completeOnboarding({ name: user.displayName || (user.email ? user.email.split('@')[0] : 'You'), email: user.email || '' });
+      DB.workspaces.ensureEmailIndex(); // lets others find this account by email to share tasks with it
       closeModal('#addaccount-modal-scrim');
       showToast('Account added', 'Switched to the new account.');
       onAdded && onAdded();
@@ -763,6 +827,45 @@ const UI = (() => {
     $('#app-lock-item').onclick = () => {
       closeAllPopovers();
       openAppLockSetup();
+    };
+  }
+
+  // ---------------- Sharing: pick a username (account popover) ----------------
+  // Adds a "Sharing" section to the account popover with a row for
+  // claiming/changing your @username — the identifier other people can
+  // use to add you to a shared task list instead of your email (see
+  // DB.workspaces.setUsername / addPerson in data.js).
+  function injectUsernameMenu() {
+    const popover = $('#profile-popover');
+    if (!popover || popover.querySelector('#username-item')) return;
+
+    const section = document.createElement('div');
+    section.innerHTML = `
+      <div class="popover-divider"></div>
+      <div class="popover-label">Username</div>
+      <button class="popover-item" id="username-item"><span>&#64;</span><span id="username-item-label"></span></button>
+    `;
+    popover.appendChild(section);
+
+    const label = $('#username-item-label');
+    const renderLabel = () => {
+      const username = DB.workspaces.getUsername();
+      label.textContent = username ? `Your username: @${username} (tap to change)` : 'Set a username';
+    };
+    renderLabel();
+
+    $('#username-item').onclick = async () => {
+      const current = DB.workspaces.getUsername();
+      const input = prompt('Pick a username so others can share task lists with you using @username instead of your email:', current || '');
+      if (input === null || !input.trim()) return; // cancelled or empty
+      try {
+        const clean = await DB.workspaces.setUsername(input);
+        closeAllPopovers();
+        showToast('Username set', `You're now @${clean}.`);
+        renderLabel();
+      } catch (err) {
+        showToast('Couldn\u2019t set username', err.message || 'Please try again.');
+      }
     };
   }
 
@@ -946,6 +1049,7 @@ const UI = (() => {
 
     const completeFromUser = (user) => {
       DB.completeOnboarding({ name: user.displayName || (user.email ? user.email.split('@')[0] : 'You'), email: user.email || '' });
+      DB.workspaces.ensureEmailIndex(); // lets others find this account by email to share tasks with it
       onDone();
     };
 
@@ -1181,6 +1285,7 @@ const UI = (() => {
 
     const finishWithFirebaseUser = (user) => {
       DB.completeOnboarding({ name: user.displayName || (user.email ? user.email.split('@')[0] : 'You'), email: user.email || '' });
+      DB.workspaces.ensureEmailIndex(); // lets others find this account by email to share tasks with it
       overlay.remove();
       onDone();
     };
