@@ -227,16 +227,23 @@ const Modals = (() => {
     $('#entry-cancel-btn').onclick = () => UI.closeModal('#entry-modal-scrim');
     $('#entry-modal-close').onclick = () => UI.closeModal('#entry-modal-scrim');
 
-    $('#entry-delete-btn').onclick = () => {
+    $('#entry-delete-btn').onclick = async () => {
       if (editing && confirm('Delete this item?')) {
-        DB.events.remove(editing.id);
+        const isSharedTask = type === 'task' && editing.workspaceId && editing.workspaceId !== 'personal';
+        try {
+          if (isSharedTask) await DB.sharedTasks.remove(editing.workspaceId, editing.id);
+          else DB.events.remove(editing.id);
+        } catch (err) {
+          UI.showToast('Couldn\u2019t delete', 'Check your connection and try again.');
+          return;
+        }
         if (typeof Reminders !== 'undefined') Reminders.cancelNative(editing.id);
         UI.closeModal('#entry-modal-scrim');
         onSaved && onSaved();
       }
     };
 
-    form.onsubmit = (e) => {
+    form.onsubmit = async (e) => {
       e.preventDefault();
       const title = $('#entry-title').value.trim();
       if (!title) return;
@@ -253,13 +260,37 @@ const Modals = (() => {
 
       const payload = { type, title, date, time, notes: notesVal, reminder };
       if (type === 'task') {
+        // Which task list (Personal, or a shared one) this task belongs to —
+        // keeps its original list when editing, or the list that was open
+        // when it was created.
+        payload.workspaceId = editing ? (editing.workspaceId || 'personal') : (defaults.workspaceId || 'personal');
         payload.done = editing ? (editing.done || false) : false;
         payload.repeat = dailyOn ? repeatFreq : null;
         payload.dailyWeeks = dailyOn ? dailyWeeks : null;
         if (dailyOn) payload.doneDates = editing?.doneDates || [];
       }
 
-      const saved = editing ? DB.events.update(editing.id, payload) : DB.events.create(payload);
+      // A shared task (payload.workspaceId points at a shareLists doc,
+      // not 'personal') is saved to Firestore instead of the local
+      // IndexedDB events store, so the other member sees it too.
+      const isSharedTask = type === 'task' && payload.workspaceId && payload.workspaceId !== 'personal';
+      let saved;
+      const submitBtn = form.querySelector('button[type="submit"]');
+      try {
+        if (isSharedTask) {
+          if (submitBtn) submitBtn.disabled = true;
+          saved = editing
+            ? await DB.sharedTasks.update(payload.workspaceId, editing.id, payload)
+            : await DB.sharedTasks.create(payload.workspaceId, payload);
+        } else {
+          saved = editing ? DB.events.update(editing.id, payload) : DB.events.create(payload);
+        }
+      } catch (err) {
+        if (submitBtn) submitBtn.disabled = false;
+        UI.showToast('Couldn\u2019t save', 'Check your connection and try again.');
+        return;
+      }
+      if (submitBtn) submitBtn.disabled = false;
 
       // Keep the real OS-level alarm (native Android app only) in sync
       // with whatever the reminder toggle ended up as — schedule a fresh
