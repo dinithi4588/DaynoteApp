@@ -419,23 +419,14 @@ const UI = (() => {
       await DB.workspaces.refreshShared(); // ...then refresh in case another person added you
       if ($('#share-popover').classList.contains('open')) renderSharePopoverList();
     };
-    $('#share-add-item').onclick = async () => {
-      const identifier = prompt('Add a person by their DayNote email or @username to share your task list with them:');
-      if (!identifier || !identifier.trim()) return;
-      const btnRow = $('#share-add-item');
-      const original = btnRow.innerHTML;
-      btnRow.innerHTML = '<span></span><span>Adding\u2026</span>';
-      try {
+    $('#share-add-item').onclick = () => {
+      openAddPersonModal(async (identifier) => {
         const person = await DB.workspaces.addPerson(identifier);
         DB.workspaces.setActive(person.id);
         closeAllPopovers();
         Pages.tasks?.refresh?.();
         showToast('Task list shared', `You and ${person.name} now share this list.`);
-      } catch (err) {
-        showToast('Couldn\u2019t add that person', err.message || 'Please try again.');
-      } finally {
-        btnRow.innerHTML = original;
-      }
+      });
     };
   }
   function renderMyUsername() {
@@ -929,6 +920,72 @@ const UI = (() => {
     };
 
     openModal('#username-modal-scrim');
+    setTimeout(() => input.focus(), 50);
+  }
+
+  // ---------------- Sharing: add a person by email or @username ----------------
+  // Styled replacement for the old window.prompt() call in
+  // buildSharePopover(). onSubmit is the actual DB.workspaces.addPerson
+  // call (plus whatever the caller wants to do once it succeeds) --
+  // passed in so this modal stays generic and doesn't know about tasks
+  // pages, toasts for that flow, etc.
+  function buildAddPersonModalOnce() {
+    if ($('#addperson-modal-scrim')) return;
+    const scrim = document.createElement('div');
+    scrim.className = 'modal-scrim';
+    scrim.id = 'addperson-modal-scrim';
+    scrim.innerHTML = `
+      <div class="modal" id="addperson-modal">
+        <div class="modal-head">
+          <h2 class="font-display">Share this task list</h2>
+          <button class="icon-btn" id="addperson-modal-close" aria-label="Close">&#10005;</button>
+        </div>
+        <form id="addperson-form">
+          <div class="field">
+            <label for="addperson-input">Email or @username</label>
+            <input type="text" id="addperson-input" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="name@example.com or @username" />
+            <div class="field-hint">They\u2019ll see the same tasks as you from now on.</div>
+          </div>
+          <div class="applock-error" id="addperson-error" style="display:none;"></div>
+          <div class="btn-row">
+            <button type="button" class="btn ghost" id="addperson-cancel">Cancel</button>
+            <button type="submit" class="btn" style="background:var(--calendar);" id="addperson-submit-btn">Add</button>
+          </div>
+        </form>
+      </div>`;
+    document.body.appendChild(scrim);
+    $('#addperson-modal-close').onclick = () => closeModal('#addperson-modal-scrim');
+    $('#addperson-cancel').onclick = () => closeModal('#addperson-modal-scrim');
+  }
+
+  function openAddPersonModal(onSubmit) {
+    buildAddPersonModalOnce();
+    const input = $('#addperson-input');
+    const errEl = $('#addperson-error');
+    const submitBtn = $('#addperson-submit-btn');
+    errEl.style.display = 'none';
+    input.value = '';
+
+    $('#addperson-form').onsubmit = async (e) => {
+      e.preventDefault();
+      const identifier = input.value.trim();
+      if (!identifier) { errEl.textContent = 'Enter an email or username.'; errEl.style.display = 'block'; return; }
+      errEl.style.display = 'none';
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Adding\u2026';
+      try {
+        await onSubmit(identifier);
+        closeModal('#addperson-modal-scrim');
+      } catch (err) {
+        errEl.textContent = err.message || 'Please try again.';
+        errEl.style.display = 'block';
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Add';
+      }
+    };
+
+    openModal('#addperson-modal-scrim');
     setTimeout(() => input.focus(), 50);
   }
 
