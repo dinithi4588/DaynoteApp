@@ -180,6 +180,19 @@ const Reminders = (() => {
         DB.events.update(item.id, { reminder: { ...r, fired: true } });
       }
     });
+    // Shared tasks (Firestore) fire the same way — covers any shared
+    // list this account has had DB.sharedTasks.subscribe() called for
+    // this session (see DB.workspaces.startSharedSync, called once at
+    // app startup for a signed-in user).
+    if (typeof DB.sharedTasks !== 'undefined') {
+      DB.sharedTasks.allCached().forEach(item => {
+        const r = item.reminder;
+        if (r && r.enabled && !r.fired && r.at <= now) {
+          fire(`Task due: ${item.title}`, item.notes || 'Coming up now');
+          DB.sharedTasks.update(item.workspaceId, item.id, { reminder: { ...r, fired: true } }).catch(() => {});
+        }
+      });
+    }
   }
 
   function start() {
