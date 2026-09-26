@@ -30,6 +30,26 @@
       </a>
     </div>
     <div class="topbar-right">
+      <!-- Task sharing: person+ icon, tasks page only. Opens a list of
+           "Personal" plus anyone you've added to share task lists with;
+           tapping a name switches the page to that shared list. -->
+      <div style="position:relative;">
+        <button class="icon-btn" id="share-btn" aria-label="Share tasks" title="Share tasks">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M13.5 20a5.5 5.5 0 0 0-11 0"/>
+            <circle cx="8" cy="8.5" r="3.5"/>
+            <line x1="18.5" y1="7" x2="18.5" y2="13"/>
+            <line x1="15.5" y1="10" x2="21.5" y2="10"/>
+          </svg>
+        </button>
+        <div class="popover" id="share-popover">
+          <div id="share-my-username" style="font-size:11px;color:var(--ink-faint);padding:6px 8px 2px;"></div>
+          <div class="popover-label">Task lists</div>
+          <div id="share-popover-list"></div>
+          <div class="popover-divider"></div>
+          <button class="popover-item" id="share-add-item"><span>&#65291;</span><span>Add person</span></button>
+        </div>
+      </div>
       <button class="icon-btn" id="theme-btn" aria-label="Change theme" title="Change theme">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
           <circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="1.6"/>
@@ -158,6 +178,7 @@
 <script src="cordova.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
 <script src="firebase-config.js"></script>
 <script src="data.js"></script>
 <script src="notifications.js"></script>
