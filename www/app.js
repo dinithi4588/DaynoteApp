@@ -854,19 +854,82 @@ const UI = (() => {
     };
     renderLabel();
 
-    $('#username-item').onclick = async () => {
-      const current = DB.workspaces.getUsername();
-      const input = prompt('Pick a username so others can share task lists with you using @username instead of your email:', current || '');
-      if (input === null || !input.trim()) return; // cancelled or empty
+    $('#username-item').onclick = () => {
+      closeAllPopovers();
+      openUsernameModal(renderLabel);
+    };
+  }
+
+  // Styled replacement for the old window.prompt() username dialog, built
+  // once and reused (same pattern as buildAddAccountModalOnce /
+  // buildLockModalOnce). The "@" is shown as a fixed prefix on the input
+  // itself, so it's visually clear you never type it yourself — typing
+  // one anyway still works fine since setUsername() strips a leading "@".
+  function buildUsernameModalOnce() {
+    if ($('#username-modal-scrim')) return;
+    const scrim = document.createElement('div');
+    scrim.className = 'modal-scrim';
+    scrim.id = 'username-modal-scrim';
+    scrim.innerHTML = `
+      <div class="modal" id="username-modal">
+        <div class="modal-head">
+          <h2 class="font-display">Set a username</h2>
+          <button class="icon-btn" id="username-modal-close" aria-label="Close">&#10005;</button>
+        </div>
+        <form id="username-form">
+          <div class="field">
+            <label for="username-input">Username</label>
+            <div class="field-prefixed">
+              <span class="field-prefix">&#64;</span>
+              <input type="text" id="username-input" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="yourname" />
+            </div>
+            <div class="field-hint">3\u201320 characters: lowercase letters, numbers, underscore. Others can use this instead of your email to share a task list with you.</div>
+          </div>
+          <div class="applock-error" id="username-error" style="display:none;"></div>
+          <div class="btn-row">
+            <button type="button" class="btn ghost" id="username-cancel">Cancel</button>
+            <button type="submit" class="btn" style="background:var(--calendar);" id="username-submit-btn">Save</button>
+          </div>
+        </form>
+      </div>`;
+    document.body.appendChild(scrim);
+    $('#username-modal-close').onclick = () => closeModal('#username-modal-scrim');
+    $('#username-cancel').onclick = () => closeModal('#username-modal-scrim');
+  }
+
+  function openUsernameModal(onSaved) {
+    buildUsernameModalOnce();
+    const input = $('#username-input');
+    const errEl = $('#username-error');
+    const submitBtn = $('#username-submit-btn');
+    errEl.style.display = 'none';
+    // Prefill with the current username (without its "@") so changing it
+    // starts from what's already set, same as the old prompt() did.
+    input.value = DB.workspaces.getUsername() || '';
+
+    $('#username-form').onsubmit = async (e) => {
+      e.preventDefault();
+      const raw = input.value.trim();
+      if (!raw) { errEl.textContent = 'Enter a username.'; errEl.style.display = 'block'; return; }
+      errEl.style.display = 'none';
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Saving\u2026';
       try {
-        const clean = await DB.workspaces.setUsername(input);
-        closeAllPopovers();
+        const clean = await DB.workspaces.setUsername(raw);
+        closeModal('#username-modal-scrim');
         showToast('Username set', `You're now @${clean}.`);
-        renderLabel();
+        onSaved && onSaved();
       } catch (err) {
-        showToast('Couldn\u2019t set username', err.message || 'Please try again.');
+        errEl.textContent = err.message || 'Please try again.';
+        errEl.style.display = 'block';
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Save';
       }
     };
+
+    openModal('#username-modal-scrim');
+    setTimeout(() => input.focus(), 50);
   }
 
   // ---------------- App lock: setup modal + unlock overlay ----------------
